@@ -1,0 +1,4 @@
+appwrite
+openai
+python-dotenv
+

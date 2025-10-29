@@ -1,0 +1,38 @@
+# Python虚拟环境
+.venv/
+venv/
+env/
+
+# Python编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 环境变量
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志
+*.log
+
+# 临时文件
+*.tmp
+*.bak
+
+# 测试覆盖率
+.coverage
+htmlcov/
+
+# 打包
+dist/
+build/
+*.egg-info/
+

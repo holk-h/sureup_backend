@@ -1,0 +1,6 @@
+# Appwrite Server SDK
+appwrite>=6.0.0
+
+# 用于环境变量管理
+python-dotenv>=1.0.0
+
