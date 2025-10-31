@@ -65,6 +65,29 @@
             "path": "functions/mistake-recorder"
         },
         {
+            "$id": "mistake-analyzer",
+            "name": "错题分析器 (L1-Trigger)",
+            "runtime": "python-3.9",
+            "specification": "s-1vcpu-1gb",
+            "execute": [],
+            "events": [
+                "databases.*.collections.mistake_records.documents.*.create",
+                "databases.*.collections.mistake_records.documents.*.update"
+            ],
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "files.read"
+            ],
+            "schedule": "",
+            "timeout": 60,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/mistake-analyzer"
+        },
+        {
             "$id": "stats-updater",
             "name": "统计更新器 (L1)",
             "runtime": "python-3.9",
@@ -260,8 +283,9 @@
         {
             "$id": "profiles",
             "$permissions": [
+                "create(\"any\")",
                 "read(\"any\")",
-                "create(\"users\")"
+                "update(\"users\")"
             ],
             "databaseId": "main",
             "name": "用户档案",
@@ -356,6 +380,76 @@
                     "array": false,
                     "format": "",
                     "default": null
+                },
+                {
+                    "key": "phone",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "email",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 255,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "completedSessions",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10240,
+                    "default": 0
+                },
+                {
+                    "key": "lastPracticeDate",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "statsUpdatedAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "weekMistakes",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10240,
+                    "default": 0
+                },
+                {
+                    "key": "totalQuestions",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10240,
+                    "default": 0
+                },
+                {
+                    "key": "totalCorrectAnswers",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10240,
+                    "default": 0
                 }
             ],
             "indexes": [
@@ -394,12 +488,21 @@
                 "read(\"any\")"
             ],
             "databaseId": "main",
-            "name": "用户知识点树",
+            "name": "用户知识点",
             "enabled": true,
             "rowSecurity": true,
             "columns": [
                 {
                     "key": "userId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "moduleId",
                     "type": "string",
                     "required": true,
                     "array": false,
@@ -426,24 +529,6 @@
                     "encrypt": false
                 },
                 {
-                    "key": "parentId",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 36,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
-                    "key": "level",
-                    "type": "integer",
-                    "required": false,
-                    "array": false,
-                    "min": -9223372036854775808,
-                    "max": 9223372036854775807,
-                    "default": 1
-                },
-                {
                     "key": "description",
                     "type": "string",
                     "required": false,
@@ -453,21 +538,12 @@
                     "encrypt": false
                 },
                 {
-                    "key": "color",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 20,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
                     "key": "mistakeCount",
                     "type": "integer",
                     "required": false,
                     "array": false,
-                    "min": -9223372036854775808,
-                    "max": 9223372036854775807,
+                    "min": 0,
+                    "max": 2147483647,
                     "default": 0
                 },
                 {
@@ -475,8 +551,8 @@
                     "type": "integer",
                     "required": false,
                     "array": false,
-                    "min": -9223372036854775808,
-                    "max": 9223372036854775807,
+                    "min": 0,
+                    "max": 2147483647,
                     "default": 0
                 },
                 {
@@ -486,18 +562,19 @@
                     "array": false,
                     "format": "",
                     "default": null
-                },
-                {
-                    "key": "createdFrom",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 20,
-                    "default": "ai",
-                    "encrypt": false
                 }
             ],
             "indexes": [
+                {
+                    "key": "userId_moduleId_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "moduleId"
+                    ],
+                    "orders": []
+                },
                 {
                     "key": "userId_subject_idx",
                     "type": "key",
@@ -509,21 +586,12 @@
                     "orders": []
                 },
                 {
-                    "key": "userId_parentId_idx",
-                    "type": "key",
+                    "key": "userId_name_unique",
+                    "type": "unique",
                     "status": "available",
                     "columns": [
                         "userId",
-                        "parentId"
-                    ],
-                    "orders": []
-                },
-                {
-                    "key": "userId_name_idx",
-                    "type": "key",
-                    "status": "available",
-                    "columns": [
-                        "userId",
+                        "moduleId",
                         "name"
                     ],
                     "orders": []
@@ -546,7 +614,7 @@
                 "read(\"any\")"
             ],
             "databaseId": "main",
-            "name": "全局知识点库",
+            "name": "学科模块库",
             "enabled": true,
             "rowSecurity": false,
             "columns": [
@@ -569,24 +637,6 @@
                     "encrypt": false
                 },
                 {
-                    "key": "parentId",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 36,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
-                    "key": "level",
-                    "type": "integer",
-                    "required": false,
-                    "array": false,
-                    "min": -9223372036854775808,
-                    "max": 9223372036854775807,
-                    "default": 1
-                },
-                {
                     "key": "description",
                     "type": "string",
                     "required": false,
@@ -596,45 +646,48 @@
                     "encrypt": false
                 },
                 {
-                    "key": "aliases",
-                    "type": "string",
+                    "key": "order",
+                    "type": "integer",
                     "required": false,
-                    "array": true,
-                    "size": 2000,
-                    "default": null,
-                    "encrypt": false
+                    "array": false,
+                    "min": 0,
+                    "max": 10000,
+                    "default": 0
                 },
                 {
                     "key": "usageCount",
                     "type": "integer",
                     "required": false,
                     "array": false,
-                    "min": -9223372036854775808,
-                    "max": 9223372036854775807,
+                    "min": 0,
+                    "max": 2147483647,
                     "default": 0
                 },
                 {
-                    "key": "isVerified",
+                    "key": "isActive",
                     "type": "boolean",
                     "required": false,
                     "array": false,
-                    "default": false
+                    "default": true
                 }
             ],
             "indexes": [
                 {
-                    "key": "subject_level_idx",
+                    "key": "subject_order_idx",
                     "type": "key",
                     "status": "available",
                     "columns": [
                         "subject",
-                        "level"
+                        "order"
                     ],
-                    "orders": []
+                    "orders": [
+                        "ASC",
+                        "ASC"
+                    ]
                 },
                 {
                     "key": "subject_name_idx",
-                    "type": "key",
+                    "type": "unique",
                     "status": "available",
                     "columns": [
                         "subject",
@@ -673,19 +726,19 @@
                     "encrypt": false
                 },
                 {
-                    "key": "knowledgePointId",
+                    "key": "moduleIds",
                     "type": "string",
                     "required": true,
-                    "array": false,
-                    "size": 36,
+                    "array": true,
+                    "size": 100,
                     "default": null,
                     "encrypt": false
                 },
                 {
-                    "key": "knowledgePointName",
+                    "key": "knowledgePointIds",
                     "type": "string",
                     "required": true,
-                    "array": false,
+                    "array": true,
                     "size": 100,
                     "default": null,
                     "encrypt": false
@@ -731,7 +784,7 @@
                     "type": "string",
                     "required": false,
                     "array": false,
-                    "size": 1000,
+                    "size": 500,
                     "default": null,
                     "encrypt": false
                 },
@@ -799,12 +852,11 @@
             ],
             "indexes": [
                 {
-                    "key": "subject_kp_idx",
+                    "key": "subject_idx",
                     "type": "key",
                     "status": "available",
                     "columns": [
-                        "subject",
-                        "knowledgePointId"
+                        "subject"
                     ],
                     "orders": []
                 },
@@ -859,18 +911,27 @@
                 {
                     "key": "questionId",
                     "type": "string",
-                    "required": true,
+                    "required": false,
                     "array": false,
                     "size": 36,
                     "default": null,
                     "encrypt": false
                 },
                 {
-                    "key": "userKnowledgePointId",
+                    "key": "moduleIds",
                     "type": "string",
-                    "required": true,
-                    "array": false,
-                    "size": 36,
+                    "required": false,
+                    "array": true,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "knowledgePointIds",
+                    "type": "string",
+                    "required": false,
+                    "array": true,
+                    "size": 100,
                     "default": null,
                     "encrypt": false
                 },
@@ -884,22 +945,39 @@
                     "encrypt": false
                 },
                 {
-                    "key": "knowledgePointName",
-                    "type": "string",
-                    "required": true,
-                    "array": false,
-                    "size": 100,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
                     "key": "errorReason",
                     "type": "string",
-                    "required": true,
+                    "required": false,
                     "array": false,
                     "size": 30,
                     "default": null,
                     "encrypt": false
+                },
+                {
+                    "key": "analysisStatus",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "pending",
+                    "encrypt": false
+                },
+                {
+                    "key": "analysisError",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 1000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "analyzedAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
                 },
                 {
                     "key": "note",
@@ -997,16 +1075,6 @@
                     "orders": []
                 },
                 {
-                    "key": "userId_kpId_idx",
-                    "type": "key",
-                    "status": "available",
-                    "columns": [
-                        "userId",
-                        "userKnowledgePointId"
-                    ],
-                    "orders": []
-                },
-                {
                     "key": "userId_status_idx",
                     "type": "key",
                     "status": "available",
@@ -1023,6 +1091,16 @@
                     "columns": [
                         "userId",
                         "lastReviewAt"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "userId_analysisStatus_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "analysisStatus"
                     ],
                     "orders": []
                 }
@@ -1066,7 +1144,16 @@
                     "encrypt": false
                 },
                 {
-                    "key": "userKnowledgePointId",
+                    "key": "moduleId",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "knowledgePointId",
                     "type": "string",
                     "required": false,
                     "array": false,
@@ -1662,6 +1749,42 @@
                     "orders": []
                 }
             ]
+        }
+    ],
+    "buckets": [
+        {
+            "$id": "extracted-images",
+            "$permissions": [
+                "create(\"any\")",
+                "read(\"any\")",
+                "update(\"users\")",
+                "delete(\"users\")"
+            ],
+            "fileSecurity": false,
+            "name": "提取的图表",
+            "enabled": true,
+            "maximumFileSize": 30000000,
+            "allowedFileExtensions": [],
+            "compression": "none",
+            "encryption": false,
+            "antivirus": true
+        },
+        {
+            "$id": "origin_question_image",
+            "$permissions": [
+                "create(\"any\")",
+                "read(\"any\")",
+                "update(\"users\")",
+                "delete(\"users\")"
+            ],
+            "fileSecurity": false,
+            "name": "原始错题图片",
+            "enabled": true,
+            "maximumFileSize": 30000000,
+            "allowedFileExtensions": [],
+            "compression": "none",
+            "encryption": true,
+            "antivirus": true
         }
     ]
 }
