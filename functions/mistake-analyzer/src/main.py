@@ -26,10 +26,10 @@ from appwrite.services.databases import Databases
 from appwrite.services.storage import Storage
 from appwrite.exception import AppwriteException
 
-from image_analyzer import analyze_mistake_image
-from question_service import create_or_find_question
-from knowledge_point_service import ensure_knowledge_point, ensure_module
-from utils import get_databases, get_storage
+from .image_analyzer import analyze_mistake_image
+from .question_service import create_question
+from .knowledge_point_service import ensure_knowledge_point, ensure_module
+from .utils import get_databases, get_storage
 
 
 # Configuration
@@ -88,25 +88,21 @@ def process_mistake_analysis(record_data: dict, databases: Databases, storage: S
     """
     record_id = record_data['$id']
     user_id = record_data['userId']
-    subject = record_data['subject']
-    original_image_urls = record_data.get('originalImageUrls', [])
+    original_image_ids = record_data.get('originalImageIds', [])
     
     # 验证必要字段
-    if not original_image_urls or len(original_image_urls) == 0:
+    if not original_image_ids or len(original_image_ids) == 0:
         raise ValueError("错题记录缺少图片")
-    
-    if not subject:
-        raise ValueError("错题记录缺少学科信息")
     
     # 1. 更新状态为 processing
     update_record_status(databases, record_id, 'processing')
     
     try:
         # 2. 下载第一张图片（目前只处理第一张）
-        # originalImageUrls 存储的是 fileId
-        file_id = original_image_urls[0]
+        # originalImageIds 存储的是 fileId，图片已经在 bucket 中
+        file_id = original_image_ids[0]
         
-        # 尝试下载图片
+        # 下载图片并转换为 base64
         try:
             image_bytes = download_image_from_storage(storage, file_id)
             # 转换为 base64
@@ -116,17 +112,16 @@ def process_mistake_analysis(record_data: dict, databases: Databases, storage: S
             raise ValueError(f"无法下载图片 {file_id}: {str(e)}")
         
         # 3. 分析图片（使用 LLM 视觉能力）
+        # AI 会自动识别学科、模块和知识点
         analysis_result = analyze_mistake_image(
-            image_url=None,
             image_base64=image_base64,
-            subject=subject,
-            storage=storage,
             databases=databases
         )
         
         """
         analysis_result 结构:
         {
+            'subject': str,                 # 学科（AI 识别）
             'content': str,                 # 题目内容（Markdown格式）
             'type': str,                    # 题目类型
             'module': str,                  # 模块名称
@@ -137,13 +132,20 @@ def process_mistake_analysis(record_data: dict, databases: Databases, storage: S
             'difficulty': int,              # 难度 1-5
             'userAnswer': str,              # 用户的错误答案
             'errorReason': str,             # 错误原因
-            'extractedImageUrls': list,     # 提取的图表URL列表
-            'originalImageUrl': str,        # 原始图片URL
             'confidence': float             # 识别置信度
         }
+        
+        注意：
+        - 原始错题图片ID存储在 mistake_record 的 originalImageIds 字段中
+        - 创建题目时，使用 originalImageIds 作为题目的 imageIds
         """
         
-        # 4. 确保模块存在
+        # 4. 获取 AI 识别的学科
+        subject = analysis_result.get('subject')
+        if not subject:
+            raise ValueError("未能识别学科")
+        
+        # 5. 确保模块存在
         module_name = analysis_result.get('module')
         if not module_name:
             raise ValueError("未能识别模块")
@@ -154,7 +156,7 @@ def process_mistake_analysis(record_data: dict, databases: Databases, storage: S
             module_name=module_name
         )
         
-        # 5. 确保所有知识点都存在
+        # 6. 确保所有知识点都存在
         knowledge_point_names = analysis_result.get('knowledgePointNames', [])
         if not knowledge_point_names:
             raise ValueError("未能识别知识点")
@@ -172,8 +174,9 @@ def process_mistake_analysis(record_data: dict, databases: Databases, storage: S
             )
             knowledge_point_ids.append(kp_info['$id'])
         
-        # 6. 创建或查找题目
-        question = create_or_find_question(
+        # 7. 创建题目
+        # 使用原始错题图片ID作为题目的imageIds
+        question = create_question(
             databases=databases,
             subject=subject,
             module_ids=[module_info['$id']],
@@ -184,13 +187,14 @@ def process_mistake_analysis(record_data: dict, databases: Databases, storage: S
             options=analysis_result.get('options'),
             answer=analysis_result.get('answer'),
             explanation=analysis_result.get('explanation'),
-            image_urls=analysis_result.get('extractedImageUrls', []),
+            image_ids=original_image_ids,  # 使用原始错题图片ID
             created_by=user_id,
             source='ocr'
         )
         
-        # 7. 更新错题记录（完善信息）
+        # 8. 更新错题记录（完善信息，包括 AI 识别的学科）
         update_data = {
+            'subject': subject,                         # AI 识别的学科
             'questionId': question['$id'],
             'moduleIds': [module_info['$id']],
             'knowledgePointIds': knowledge_point_ids,
@@ -201,7 +205,7 @@ def process_mistake_analysis(record_data: dict, databases: Databases, storage: S
         if analysis_result.get('userAnswer'):
             update_data['userAnswer'] = analysis_result['userAnswer']
         
-        # 8. 更新状态为 completed
+        # 9. 更新状态为 completed
         update_record_status(
             databases=databases,
             record_id=record_id,

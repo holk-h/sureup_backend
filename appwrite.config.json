@@ -798,7 +798,7 @@
                     "encrypt": false
                 },
                 {
-                    "key": "imageUrls",
+                    "key": "imageIds",
                     "type": "string",
                     "required": false,
                     "array": true,
@@ -938,7 +938,7 @@
                 {
                     "key": "subject",
                     "type": "string",
-                    "required": true,
+                    "required": false,
                     "array": false,
                     "size": 20,
                     "default": null,
@@ -1025,7 +1025,7 @@
                     "default": 0
                 },
                 {
-                    "key": "originalImageUrls",
+                    "key": "originalImageIds",
                     "type": "string",
                     "required": false,
                     "array": true,

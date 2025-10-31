@@ -229,11 +229,12 @@ class DoubaoProvider(LLMProvider):
                 })
             elif image_base64:
                 # 确保有正确的前缀
-                if not image_base64.startswith('data:'):
-                    image_base64 = f"data:image/jpeg;base64,{image_base64}"
+                formatted_image = image_base64
+                if not formatted_image.startswith('data:'):
+                    formatted_image = f"data:image/jpeg;base64,{formatted_image}"
                 content.append({
                     "type": "image_url",
-                    "image_url": {"url": image_base64}
+                    "image_url": {"url": formatted_image}
                 })
             
             messages.append({"role": "user", "content": content})
@@ -357,11 +358,12 @@ class ChatGPTProvider(LLMProvider):
                 })
             elif image_base64:
                 # 确保有正确的前缀
-                if not image_base64.startswith('data:'):
-                    image_base64 = f"data:image/jpeg;base64,{image_base64}"
+                formatted_image = image_base64
+                if not formatted_image.startswith('data:'):
+                    formatted_image = f"data:image/jpeg;base64,{formatted_image}"
                 content.append({
                     "type": "image_url",
-                    "image_url": {"url": image_base64}
+                    "image_url": {"url": formatted_image}
                 })
             
             messages.append({"role": "user", "content": content})
@@ -478,20 +480,20 @@ class GeminiProvider(LLMProvider):
         def _make_request():
             # 如果是 URL，需要下载并转换为 base64
             if image_url:
-                image_base64_data = self._download_image_to_base64(image_url)
+                formatted_image = self._download_image_to_base64(image_url)
             else:
-                image_base64_data = image_base64
+                formatted_image = image_base64
             
             # 提取纯 base64 数据（去掉前缀）
-            if ',' in image_base64_data:
-                mime_type, base64_data = image_base64_data.split(',', 1)
+            if ',' in formatted_image:
+                mime_type, base64_data = formatted_image.split(',', 1)
                 # 提取 mime type
                 if 'image/' in mime_type:
                     mime = mime_type.split(';')[0].replace('data:', '')
                 else:
                     mime = 'image/jpeg'
             else:
-                base64_data = image_base64_data
+                base64_data = formatted_image
                 mime = 'image/jpeg'
             
             contents = []

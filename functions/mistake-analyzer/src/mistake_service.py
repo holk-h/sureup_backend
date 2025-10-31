@@ -27,7 +27,7 @@ def create_mistake_record(
     error_reason: str,
     user_answer: Optional[str] = None,
     note: Optional[str] = None,
-    original_image_urls: Optional[List[str]] = None
+    original_image_ids: Optional[List[str]] = None
 ) -> Dict:
     """
     创建错题记录
@@ -70,7 +70,7 @@ def create_mistake_record(
         'errorReason': error_reason,
         'userAnswer': user_answer or '',
         'note': note or '',
-        'originalImageUrls': original_image_urls or [],
+        'originalImageIds': original_image_ids or [],
         'masteryStatus': 'notStarted',
         'reviewCount': 0,
         'correctCount': 0,

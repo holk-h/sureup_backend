@@ -31,7 +31,7 @@
      {
        "userId": "xxx",
        "subject": "math",
-       "originalImageUrls": [fileId],
+       "originalImageIds": [fileId],
        "analysisStatus": "pending"  // 默认值
      }
    - 订阅该文档的 Realtime 更新
@@ -223,7 +223,7 @@ pending ──────────> processing ─────────�
 {
   userId: string,              // 用户ID
   subject: string,             // 学科
-  originalImageUrls: string[], // 图片 fileId 数组
+  originalImageIds: string[], // 图片 fileId 数组
   
   // 分析状态
   analysisStatus: string,      // pending/processing/completed/failed

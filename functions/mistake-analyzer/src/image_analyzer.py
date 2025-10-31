@@ -5,24 +5,22 @@
 使用 LLM 的视觉能力直接分析图片，提取题目信息并转换为 Markdown 格式
 
 内部统一使用 base64 格式处理图片
+图片已由 Flutter 端上传到 bucket，此模块只负责分析
 """
 import os
 import json
 import base64
 from typing import Dict, List, Optional
 from appwrite.client import Client
-from appwrite.services.storage import Storage
 from appwrite.services.databases import Databases
-from appwrite.id import ID
 from appwrite.query import Query
 
-from llm_provider import get_llm_provider
+from .llm_provider import get_llm_provider
 
 
 # 常量配置
 DATABASE_ID = os.environ.get('APPWRITE_DATABASE_ID', 'main')
 COLLECTION_MODULES = 'knowledge_points_library'
-BUCKET_ORIGINAL_IMAGES = 'origin_question_image'
 
 # 学科中文映射
 SUBJECT_NAMES = {
@@ -52,22 +50,6 @@ def create_appwrite_client() -> Client:
     return client
 
 
-def url_to_base64(image_url: str) -> str:
-    """
-    从 URL 下载图片并转换为 base64
-    
-    Args:
-        image_url: 图片 URL
-        
-    Returns:
-        纯 base64 字符串（不含 data:image 前缀）
-    """
-    import requests
-    response = requests.get(image_url, timeout=30)
-    response.raise_for_status()
-    return base64.b64encode(response.content).decode('utf-8')
-
-
 def clean_base64(image_base64: str) -> str:
     """
     清理 base64 字符串，去除 data:image 前缀
@@ -84,7 +66,11 @@ def clean_base64(image_base64: str) -> str:
 
 
 def clean_json_response(response: str) -> str:
-    """清理 LLM 响应中的代码块标记"""
+    """
+    清理 LLM 响应中的代码块标记
+    
+    注意：不处理 LaTeX 公式中的反斜杠，因为 json.loads 会正确处理它们
+    """
     response = response.strip()
     if response.startswith('```json'):
         response = response[7:]
@@ -108,7 +94,6 @@ def create_fallback_result(subject: str, error_msg: str = '') -> Dict:
         'difficulty': 3,
         'userAnswer': '',
         'errorReason': 'other',
-        'extractedImageUrls': [],
         'confidence': 0.0,
         'error': error_msg
     }
@@ -117,106 +102,61 @@ def create_fallback_result(subject: str, error_msg: str = '') -> Dict:
 # ============= 主要功能函数 =============
 
 def analyze_mistake_image(
-    image_url: Optional[str] = None,
-    image_base64: Optional[str] = None,
-    subject: str = 'math',
-    storage: Optional[Storage] = None,
+    image_base64: str,
     databases: Optional[Databases] = None
 ) -> Dict:
     """
-    分析错题图片并提取题目信息（外部接口）
+    分析错题图片并提取题目信息
     
-    接受 URL 或 base64，内部统一转换为 base64 处理
+    统一使用 base64 格式，图片已经在 bucket 中，不需要保存
+    AI 会自动识别学科、模块和知识点
     
     Args:
-        image_url: 图片 URL（二选一）
-        image_base64: 图片 base64 编码（二选一，可包含或不包含 data:image 前缀）
-        subject: 学科
-        storage: Storage 实例（可选）
+        image_base64: 图片 base64 编码（纯 base64 或包含 data:image 前缀）
         databases: Databases 实例（可选）
         
     Returns:
-        包含题目内容、类型、模块、知识点等的字典
+        包含学科、题目内容、类型、模块、知识点等的字典
     """
-    if not image_url and not image_base64:
-        raise ValueError("必须提供 image_url 或 image_base64 其中之一")
+    if not image_base64:
+        raise ValueError("必须提供 image_base64")
     
-    # 统一转换为纯 base64（内部统一使用 base64）
-    if image_url:
-        image_base64 = url_to_base64(image_url)
-    else:
-        image_base64 = clean_base64(image_base64)
+    # 清理 base64 字符串，去除可能的前缀
+    clean_image_base64 = clean_base64(image_base64)
     
-    # 保存原始图片
-    original_image_url = save_original_image(image_base64, storage)
+    if not clean_image_base64:
+        raise ValueError("图片数据无效")
     
-    # 两步分析：OCR + 知识点
-    analysis_result = analyze_with_llm_vision(image_base64, subject, databases)
-    analysis_result['originalImageUrl'] = original_image_url
+    # 分析图片：识别学科 + OCR + 知识点
+    analysis_result = analyze_with_llm_vision(clean_image_base64, databases)
     
     return analysis_result
 
 
-def save_original_image(
-    image_base64: str,
-    storage: Optional[Storage] = None
-) -> str:
-    """
-    保存原始图片到 Storage（内部函数，只接受 base64）
-    
-    Args:
-        image_base64: 纯 base64 字符串（不含前缀）
-        storage: Storage 实例（可选）
-        
-    Returns:
-        保存后的图片 URL，失败返回空字符串
-    """
-    if not storage:
-        storage = Storage(create_appwrite_client())
-    
-    try:
-        # 解码 base64
-        image_data = base64.b64decode(image_base64)
-        
-        # 上传到 Storage
-        result = storage.create_file(
-            bucket_id=BUCKET_ORIGINAL_IMAGES,
-            file_id=ID.unique(),
-            file=image_data
-        )
-        
-        # 构建访问 URL
-        endpoint = os.environ.get('APPWRITE_ENDPOINT', 'https://cloud.appwrite.io/v1')
-        project_id = os.environ['APPWRITE_PROJECT_ID']
-        return f"{endpoint}/storage/buckets/{BUCKET_ORIGINAL_IMAGES}/files/{result['$id']}/view?project={project_id}"
-        
-    except Exception as e:
-        print(f"保存图片失败: {str(e)}")
-        return ''
-
-
 def analyze_with_llm_vision(
     image_base64: str,
-    subject: str = 'math',
     databases: Optional[Databases] = None
 ) -> Dict:
     """
     使用 LLM 两步分析法（内部函数，只接受 base64）
     
-    1. OCR + 格式转换
-    2. 知识点分析（参考系统现有模块）
+    1. OCR：提取题目内容和格式
+    2. 分析：识别学科、模块和知识点
     
     Args:
         image_base64: 纯 base64 字符串（不含前缀）
-        subject: 学科
         databases: Databases 实例（可选）
     """
     try:
-        # 第一步：提取题目内容
-        step1 = extract_question_content(image_base64, subject)
+        # 第一步：OCR 提取题目内容
+        step1 = extract_question_content(image_base64)
         
-        # 第二步：分析知识点
-        step2 = analyze_knowledge_points(step1['content'], step1['type'], subject, databases)
+        # 第二步：基于题目内容识别学科和知识点
+        step2 = analyze_subject_and_knowledge_points(
+            content=step1['content'],
+            question_type=step1['type'],
+            databases=databases
+        )
         
         # 合并结果并设置默认值
         return {
@@ -227,38 +167,36 @@ def analyze_with_llm_vision(
             'difficulty': 3,
             'userAnswer': '',
             'errorReason': 'other',
-            'confidence': 0.85,
-            'extractedImageUrls': []
+            'confidence': 0.85
         }
         
     except Exception as e:
         print(f"LLM 分析失败: {str(e)}")
-        return create_fallback_result(subject, str(e))
+        return create_fallback_result('unknown', str(e))
 
 
 def extract_question_content(
-    image_base64: str,
-    subject: str = 'math'
+    image_base64: str
 ) -> Dict:
     """
-    第一步：从图片提取题目内容（OCR + 格式转换，内部函数）
+    第一步：OCR 提取题目内容（内部函数）
+    
+    只负责从图片中识别文字和格式，不分析学科和知识点
     
     Args:
         image_base64: 纯 base64 字符串（不含前缀）
-        subject: 学科
         
     Returns:
         {'content': str, 'type': str, 'options': list}
     """
-    subject_name = SUBJECT_NAMES.get(subject, subject)
+    system_prompt = "你是专业的题目 OCR 识别专家，擅长从图片中准确提取题目文字并转换为 Markdown 格式。"
     
-    system_prompt = "你是专业的题目识别专家，擅长从图片中提取题目信息并转换为结构化的 Markdown 格式。"
-    
-    user_prompt = f"""请识别这张 {subject_name} 题目图片，提取以下信息：
+    user_prompt = """请识别这张题目图片，提取以下信息：
 
 1. **题目内容**：转换为 Markdown 格式
    - 数学/物理/化学公式使用 LaTeX 语法（行内 $...$，独立 $$...$$）
    - 保留题目的原始结构和格式
+   - 尽可能准确地识别所有文字和符号
    
 2. **题目类型**：choice(选择题)/fillBlank(填空题)/shortAnswer(简答题)/essay(论述题)
 
@@ -266,26 +204,29 @@ def extract_question_content(
 
 返回 JSON 格式（直接返回 JSON，不要用代码块）：
 
-{{
+**重要：JSON 中的反斜杠必须使用双反斜杠 \\\\ 转义！例如 LaTeX 的 \\frac 要写成 \\\\frac**
+
+{
     "content": "题目内容的完整Markdown格式",
     "type": "choice",
     "options": ["A. 选项1", "B. 选项2", ...]
-}}
+}
 
 **示例（选择题）：**
-{{
+{
     "content": "计算定积分：\\n\\n$$\\\\int_0^1 x^2 dx$$",
     "type": "choice",
-    "options": ["A. $\\\\frac{{1}}{{2}}$", "B. $\\\\frac{{1}}{{3}}$", "C. $\\\\frac{{1}}{{4}}$", "D. $\\\\frac{{2}}{{3}}$"]
-}}
+    "options": ["A. $\\\\frac{1}{2}$", "B. $\\\\frac{1}{3}$", "C. $\\\\frac{1}{4}$", "D. $\\\\frac{2}{3}$"]
+}
 
 **示例（填空题）：**
-{{
-    "content": "已知函数 $f(x) = x^2 + 2x + 1$，则 $f'(1) = $ ______。",
+{
+    "content": "一个质量为 $m$ 的物体在水平面上受到 $F$ 的力，加速度为 ______。",
     "type": "fillBlank",
     "options": []
-}}"""
+}"""
 
+    response = None
     try:
         llm = get_llm_provider()
         response = llm.chat_with_vision(
@@ -296,8 +237,26 @@ def extract_question_content(
             max_tokens=3000
         )
         
-        # 解析 JSON
-        result = json.loads(clean_json_response(response))
+        # 清理响应
+        cleaned_response = clean_json_response(response)
+        
+        # 尝试解析 JSON
+        try:
+            result = json.loads(cleaned_response)
+        except json.JSONDecodeError as e:
+            # LaTeX 公式中的反斜杠可能导致解析失败
+            # 使用 raw string 解码器
+            print(f"首次 JSON 解析失败，尝试使用 strict=False: {str(e)}")
+            try:
+                result = json.loads(cleaned_response, strict=False)
+            except:
+                # 如果还是失败，尝试替换问题字符
+                print(f"尝试修复 JSON 字符串...")
+                # 将 JSON 字符串中的单反斜杠替换为双反斜杠（除了已经是双反斜杠的）
+                import re
+                # 查找所有不是双反斜杠的单反斜杠，并替换为双反斜杠
+                fixed_response = re.sub(r'(?<!\\)\\(?!\\)', r'\\\\', cleaned_response)
+                result = json.loads(fixed_response)
         
         # 验证和规范化
         if 'content' not in result or not result['content']:
@@ -310,7 +269,7 @@ def extract_question_content(
         return result
         
     except json.JSONDecodeError as e:
-        print(f"JSON 解析失败: {str(e)}, 响应: {response}")
+        print(f"JSON 解析失败: {str(e)}, 响应: {response if response else '无响应'}")
         raise ValueError(f"题目内容提取失败: {str(e)}")
     except Exception as e:
         print(f"题目提取失败: {str(e)}")
@@ -353,77 +312,76 @@ def get_existing_modules(subject: str, databases: Optional[Databases] = None) ->
         return []
 
 
-def analyze_knowledge_points(
+def analyze_subject_and_knowledge_points(
     content: str,
     question_type: str,
-    subject: str = 'math',
     databases: Optional[Databases] = None
 ) -> Dict:
     """
-    第二步：基于题目内容分析知识点
+    第二步：基于题目内容识别学科、模块和知识点
     
     Args:
         content: 题目内容（Markdown 格式）
         question_type: 题目类型
-        subject: 学科
         databases: Databases 实例（可选）
         
     Returns:
-        {'module': str, 'knowledgePointNames': list}
+        {'subject': str, 'module': str, 'knowledgePointNames': list}
     """
-    subject_name = SUBJECT_NAMES.get(subject, subject)
-    existing_modules = get_existing_modules(subject, databases)
-    
-    # 构建模块提示文本
-    if existing_modules:
-        modules_list = '\n'.join([
-            f"{i}. {m['name']}" + (f"（{m['description']}）" if m['description'] else "")
-            for i, m in enumerate(existing_modules, 1)
-        ])
-        modules_hint = f"""
-
-**系统中已有的模块：**
-{modules_list}
-
-**请优先从上述模块中选择最合适的。如果都不合适，可以提出新的模块名称。**"""
-    else:
-        modules_hint = "\n\n**注意：系统中暂无该学科的模块，请根据题目内容提出合适的模块名称。**"
-    
     system_prompt = """你是专业的学科知识点分析专家。
 
 注意：
+- 先识别题目属于哪个学科
 - 模块是学科的大分类（如"微积分"、"代数"、"电磁学"、"有机化学"等）
 - 知识点是具体的概念和技能（如"导数"、"极限"、"牛顿第二定律"等）
-- 一个题目可能涉及多个知识点
-- 优先从系统提供的现有模块中选择，没有合适的才创建新模块"""
+- 一个题目可能涉及多个知识点"""
     
-    user_prompt = f"""请分析这道 {subject_name} 题目，识别其知识点信息：
+    user_prompt = f"""请分析这道题目，识别其学科和知识点信息：
 
 **题目内容：**
 {content}
 
 **题目类型：** {question_type}
-{modules_hint}
+
+请识别：
+1. **学科**：判断题目属于哪个学科
+   - math（数学）
+   - physics（物理）
+   - chemistry（化学）
+   - biology（生物）
+   - chinese（语文）
+   - english（英语）
+   - history（历史）
+   - geography（地理）
+   - politics（政治）
+
+2. **模块**：该学科下的模块分类
+
+3. **知识点**：题目涉及的具体知识点（可以有多个）
 
 返回 JSON 格式（直接返回 JSON，不要用代码块）：
 
 {{
+    "subject": "学科英文代码",
     "module": "模块名称",
     "knowledgePointNames": ["知识点1", "知识点2", "知识点3"]
 }}
 
 **示例（数学）：**
 {{
+    "subject": "math",
     "module": "微积分",
     "knowledgePointNames": ["定积分", "幂函数积分", "微积分基本定理"]
 }}
 
 **示例（物理）：**
 {{
+    "subject": "physics",
     "module": "力学",
     "knowledgePointNames": ["牛顿第二定律", "受力分析", "加速度计算"]
 }}"""
 
+    response = None
     try:
         llm = get_llm_provider()
         response = llm.chat(
@@ -433,22 +391,44 @@ def analyze_knowledge_points(
             max_tokens=1000
         )
         
-        # 解析 JSON
-        result = json.loads(clean_json_response(response))
+        # 清理响应
+        cleaned_response = clean_json_response(response)
+        
+        # 尝试解析 JSON（使用与 extract_question_content 相同的逻辑）
+        try:
+            result = json.loads(cleaned_response)
+        except json.JSONDecodeError as e:
+            print(f"首次 JSON 解析失败，尝试使用 strict=False: {str(e)}")
+            try:
+                result = json.loads(cleaned_response, strict=False)
+            except:
+                print(f"尝试修复 JSON 字符串...")
+                import re
+                fixed_response = re.sub(r'(?<!\\)\\(?!\\)', r'\\\\', cleaned_response)
+                result = json.loads(fixed_response)
         
         # 验证和规范化
+        if not result.get('subject'):
+            result['subject'] = 'math'  # 默认数学
+        
         if not result.get('module'):
-            result['module'] = f'{subject}_未分类'
+            # 尝试从识别的学科获取现有模块
+            subject = result['subject']
+            existing_modules = get_existing_modules(subject, databases)
+            if existing_modules:
+                result['module'] = existing_modules[0]['name']
+            else:
+                result['module'] = f'{subject}_未分类'
         
         kp_names = result.get('knowledgePointNames', [])
         if not isinstance(kp_names, list):
             kp_names = [str(kp_names)] if kp_names else []
-        result['knowledgePointNames'] = kp_names or [f'{subject}_未分类']
+        result['knowledgePointNames'] = kp_names or [f"{result['subject']}_未分类"]
         
         return result
         
     except json.JSONDecodeError as e:
-        print(f"JSON 解析失败: {str(e)}, 响应: {response}")
+        print(f"JSON 解析失败: {str(e)}, 响应: {response if response else '无响应'}")
         raise ValueError(f"知识点分析失败: {str(e)}")
     except Exception as e:
         print(f"知识点分析失败: {str(e)}")

@@ -231,7 +231,7 @@ def create_questions_collection(databases: Databases):
         databases.create_string_attribute(DATABASE_ID, collection_id, 'options', 2000, required=False, array=True)
         databases.create_string_attribute(DATABASE_ID, collection_id, 'answer', 1000, required=False)
         databases.create_string_attribute(DATABASE_ID, collection_id, 'explanation', 5000, required=False)
-        databases.create_string_attribute(DATABASE_ID, collection_id, 'imageUrls', 2000, required=False, array=True)
+        databases.create_string_attribute(DATABASE_ID, collection_id, 'imageIds', 2000, required=False, array=True)
         databases.create_string_attribute(DATABASE_ID, collection_id, 'source', 20, required=False, default='ocr')
         databases.create_string_attribute(DATABASE_ID, collection_id, 'createdBy', 36, required=False)
         databases.create_boolean_attribute(DATABASE_ID, collection_id, 'isPublic', required=False, default=False)

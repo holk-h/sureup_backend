@@ -24,7 +24,7 @@ def create_or_find_question(
     options: Optional[List[str]] = None,
     answer: Optional[str] = None,
     explanation: Optional[str] = None,
-    image_urls: Optional[List[str]] = None,
+    image_ids: Optional[List[str]] = None,
     created_by: str = None,
     source: str = 'ocr'
 ) -> Dict:
@@ -42,6 +42,7 @@ def create_or_find_question(
     - 统一使用 Markdown + LaTeX 公式格式（$$...$$）
     - 只存储ID，名称可以通过ID查询得到
     - 一个题目可以关联多个模块和多个知识点
+    - image_ids 存储的是 bucket 中的文件 ID
     """
     
     # 创建新题目
@@ -55,7 +56,7 @@ def create_or_find_question(
         'options': options or [],
         'answer': answer or '',
         'explanation': explanation or '',           # Markdown 格式（含 LaTeX 公式）
-        'imageUrls': image_urls or [],              # 题目中提取的图表
+        'imageIds': image_ids or [],                # 题目中提取的图表文件ID（存储在bucket中）
         'source': source,
         'createdBy': created_by,
         'isPublic': False,
