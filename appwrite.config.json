@@ -96,7 +96,8 @@
             "events": [
                 "databases.*.collections.mistake_records.documents.*.create",
                 "databases.*.collections.mistake_records.documents.*.update",
-                "databases.*.collections.practice_answers.documents.*.create"
+                "databases.*.collections.practice_answers.documents.*.create",
+                "databases.*.collections.practice_sessions.documents.*.update"
             ],
             "scopes": [
                 "databases.read",
@@ -450,6 +451,67 @@
                     "min": 0,
                     "max": 10240,
                     "default": 0
+                },
+                {
+                    "key": "activeDays",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10240,
+                    "default": 0
+                },
+                {
+                    "key": "weeklyMistakesData",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 2000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "lastReviewAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "todayPracticeSessions",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 1024,
+                    "default": 0
+                },
+                {
+                    "key": "weekPracticeSessions",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 1024,
+                    "default": 0
+                },
+                {
+                    "key": "todayMistakes",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 1024,
+                    "default": 0
+                },
+                {
+                    "key": "lastResetDate",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
                 }
             ],
             "indexes": [
@@ -562,6 +624,15 @@
                     "array": false,
                     "format": "",
                     "default": null
+                },
+                {
+                    "key": "questionIds",
+                    "type": "string",
+                    "required": false,
+                    "array": true,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
                 }
             ],
             "indexes": [
@@ -628,6 +699,24 @@
                     "encrypt": false
                 },
                 {
+                    "key": "educationLevel",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 20,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "grades",
+                    "type": "integer",
+                    "required": false,
+                    "array": true,
+                    "min": 1,
+                    "max": 12,
+                    "default": null
+                },
+                {
                     "key": "name",
                     "type": "string",
                     "required": true,
@@ -673,25 +762,47 @@
             ],
             "indexes": [
                 {
-                    "key": "subject_order_idx",
+                    "key": "subject_educationLevel_idx",
                     "type": "key",
                     "status": "available",
                     "columns": [
                         "subject",
+                        "educationLevel"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "subject_educationLevel_order_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "subject",
+                        "educationLevel",
                         "order"
                     ],
                     "orders": [
+                        "ASC",
                         "ASC",
                         "ASC"
                     ]
                 },
                 {
-                    "key": "subject_name_idx",
+                    "key": "subject_educationLevel_name_unique",
                     "type": "unique",
                     "status": "available",
                     "columns": [
                         "subject",
+                        "educationLevel",
                         "name"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "educationLevel_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "educationLevel"
                     ],
                     "orders": []
                 },
@@ -913,7 +1024,7 @@
                     "type": "string",
                     "required": false,
                     "array": false,
-                    "size": 36,
+                    "size": 100,
                     "default": null,
                     "encrypt": false
                 },
@@ -1025,10 +1136,10 @@
                     "default": 0
                 },
                 {
-                    "key": "originalImageIds",
+                    "key": "originalImageId",
                     "type": "string",
                     "required": false,
-                    "array": true,
+                    "array": false,
                     "size": 2000,
                     "default": null,
                     "encrypt": false

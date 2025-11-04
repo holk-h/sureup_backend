@@ -100,3 +100,74 @@ def get_storage() -> Storage:
     client.set_key(os.environ['APPWRITE_API_KEY'])
     return Storage(client)
 
+
+def get_user_profile(databases: Databases, user_id: str) -> dict:
+    """获取用户档案信息"""
+    from appwrite.query import Query
+    
+    DATABASE_ID = os.environ.get('APPWRITE_DATABASE_ID', 'main')
+    
+    try:
+        result = databases.list_documents(
+            database_id=DATABASE_ID,
+            collection_id='profiles',
+            queries=[
+                Query.equal('userId', user_id),
+                Query.limit(1)
+            ]
+        )
+        
+        documents = result.get('documents', [])
+        return documents[0] if documents else None
+        
+    except Exception as e:
+        print(f"获取用户档案失败: {str(e)}")
+        return None
+
+
+def get_education_level_from_grade(grade: int) -> str:
+    """
+    根据年级确定教育阶段（返回中文，与数据库一致）
+    
+    Args:
+        grade: 年级 (1-12)
+        
+    Returns:
+        educationLevel: '小学' (1-6), '初中' (7-9), '高中' (10-12)
+    """
+    if grade is None or grade < 1:
+        return '初中'  # 默认初中
+    
+    if 1 <= grade <= 6:
+        return '小学'
+    elif 7 <= grade <= 9:
+        return '初中'
+    elif 10 <= grade <= 12:
+        return '高中'
+    else:
+        return '初中'  # 默认初中
+
+
+def get_subject_chinese_name(subject_code: str) -> str:
+    """
+    将学科英文代码转换为中文名称（用于数据库查询）
+    
+    Args:
+        subject_code: 英文代码如 'math', 'physics'
+        
+    Returns:
+        中文名称如 '数学', '物理'
+    """
+    subject_mapping = {
+        'math': '数学',
+        'physics': '物理',
+        'chemistry': '化学',
+        'biology': '生物',
+        'chinese': '语文',
+        'english': '英语',
+        'history': '历史',
+        'geography': '地理',
+        'politics': '政治',
+    }
+    return subject_mapping.get(subject_code, subject_code)
+

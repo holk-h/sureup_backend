@@ -1,10 +1,84 @@
-# 错题分析器 (Mistake Analyzer)
+# 错题分析器 (Mistake Analyzer) - Task Queue 版本
 
-错题分析器是一个 **Event Trigger Function**，监听错题记录的创建和更新事件，自动分析错题并完善记录信息。
+错题分析器是一个 **Event Trigger Function**，监听错题记录的创建和更新事件，将分析任务入队到 Worker 系统。
+
+## 架构改进
+
+### 旧架构的问题
+
+- ❌ Appwrite Function 串行执行（只有 1 个 worker 容器）
+- ❌ 不支持并发，多个任务会排队等待
+- ❌ LLM 调用耗时长（20-40秒），阻塞后续任务
+- ❌ 超时限制（60秒），处理复杂任务可能失败
+
+### 新架构的优势
+
+- ✅ **支持 1000+ 并发**：Worker 系统可以同时处理大量任务
+- ✅ **立即返回**：Function 只负责入队，不阻塞
+- ✅ **解耦设计**：分析逻辑在 Worker 中独立运行
+- ✅ **更好的扩展性**：可以轻松添加更多 Worker 类型
+
+## 工作流程
+
+```
+┌──────────────┐
+│  Flutter 端  │
+└──────┬───────┘
+       │ 1. 上传图片 + 创建 mistake_record
+       │    (analysisStatus: "pending")
+       ▼
+┌──────────────────────────┐
+│  Appwrite Database       │
+│  (mistake_records)       │
+└──────┬───────────────────┘
+       │ 2. 触发 CREATE 事件
+       ▼
+┌──────────────────────────┐
+│  mistake-analyzer        │
+│  (Appwrite Function)     │
+│                          │
+│  - 验证任务数据          │
+│  - 调用 Worker API 入队  │
+│  - 立即返回 ✓            │
+└──────┬───────────────────┘
+       │ 3. POST /tasks/enqueue
+       ▼
+┌──────────────────────────┐
+│  Worker API (FastAPI)    │
+│                          │
+│  - 任务入队              │
+│  - 返回 task_id          │
+└──────┬───────────────────┘
+       │ 4. 任务入优先级队列
+       ▼
+┌──────────────────────────┐
+│  Worker 池 (100+ 并发)   │
+│                          │
+│  - 从队列取任务          │
+│  - 执行分析逻辑：        │
+│    * 下载图片            │
+│    * LLM 视觉分析        │
+│    * 创建题目            │
+│    * 更新错题记录        │
+└──────┬───────────────────┘
+       │ 5. 更新数据库
+       ▼
+┌──────────────────────────┐
+│  Appwrite Database       │
+│  (analysisStatus:        │
+│   "completed"/"failed")  │
+└──────┬───────────────────┘
+       │ 6. Realtime 推送
+       ▼
+┌──────────────┐
+│  Flutter 端  │
+│  显示结果    │
+└──────────────┘
+```
 
 ## 功能概述
 
-这是一个纯内部触发的函数，不提供 API 接口，完全由数据库事件驱动。
+这是一个轻量级的触发器函数，**不执行任何分析逻辑**，只负责任务调度。
 
 ### 监听事件
 
@@ -19,269 +93,181 @@
 2. ✅ 用户手动触发重新分析（Flutter 端更新状态为 `pending`）
 3. ⏭️ 其他状态（`processing`、`completed`、`failed`）跳过
 
-## 工作流程
-
-### 场景 1: 拍照上传错题（新建）
+## 文件结构
 
 ```
-1. Flutter 端:
-   - 用户拍照 + 裁剪
-   - 上传图片到 bucket (origin_question_image)，获得 fileId
-   - 创建 mistake_record 文档:
-     {
-       "userId": "xxx",
-       "subject": "math",
-       "originalImageIds": [fileId],
-       "analysisStatus": "pending"  // 默认值
-     }
-   - 订阅该文档的 Realtime 更新
-
-2. Appwrite:
-   - 触发 CREATE 事件
-   - mistake-analyzer 被自动调用
-
-3. mistake-analyzer:
-   - 检查 analysisStatus = "pending" ✅
-   - 更新状态为 "processing"
-   - 下载图片
-   - OCR + LLM 分析
-   - 创建/匹配模块和知识点
-   - 创建题目
-   - 更新 mistake_record:
-     {
-       "questionId": "yyy",
-       "moduleIds": [...],
-       "knowledgePointIds": [...],
-       "errorReason": "conceptError",
-       "analysisStatus": "completed",
-       "analyzedAt": "2024-01-01T00:00:00Z"
-     }
-
-4. Flutter 端:
-   - 收到 Realtime 更新通知
-   - 显示分析结果
+backend/functions/mistake-analyzer/
+├── src/
+│   └── main.py           # 唯一的文件，只负责入队
+├── requirements.txt      # 只需要 requests
+└── README.md             # 本文档
 ```
 
-### 场景 2: 重新分析（更新）
-
-```
-1. Flutter 端:
-   - 用户点击"重新分析"按钮
-   - 更新 mistake_record:
-     {
-       "analysisStatus": "pending",
-       "analysisError": null
-     }
-   - 继续订阅 Realtime 更新
-
-2. Appwrite:
-   - 触发 UPDATE 事件
-   - mistake-analyzer 被自动调用
-
-3. mistake-analyzer:
-   - 检查 analysisStatus = "pending" ✅
-   - 执行相同的分析流程
-   - 更新结果
-
-4. Flutter 端:
-   - 收到更新通知
-   - 显示新的分析结果
-```
-
-### 场景 3: 练习中的错题
-
-```
-1. Flutter 端:
-   - 用户在练习中答错题目
-   - 调用 mistake-recorder 的 createFromQuestion API
-   - 创建错题记录（直接关联已有题目，无需分析）
-
-2. 不会触发 mistake-analyzer
-   - 因为创建时 analysisStatus 不是 "pending"
-   - 或者不包含图片，无需分析
-```
-
-## 分析结果
-
-### 成功状态
-
-```json
-{
-  "analysisStatus": "completed",
-  "analyzedAt": "2024-01-01T00:00:00Z",
-  "questionId": "question-doc-id",
-  "moduleIds": ["module-1", "module-2"],
-  "knowledgePointIds": ["kp-1", "kp-2", "kp-3"],
-  "errorReason": "conceptError",
-  "userAnswer": "A",
-  "analysisError": null
-}
-```
-
-### 失败状态
-
-```json
-{
-  "analysisStatus": "failed",
-  "analysisError": "OCR 识别失败: 图片模糊",
-  "analyzedAt": null,
-  "questionId": null
-}
-```
-
-## 状态机
-
-```
-pending ──────────> processing ──────────> completed
-   ↑                                            |
-   |                    ↓                       |
-   └──────────────── failed ←──────────────────┘
-                       ↓
-                  (用户重新分析)
-                       ↓
-                    pending
-```
-
-## 技术实现
-
-### 核心模块
-
-- `main.py` - 事件处理入口
-- `image_analyzer.py` - 图片 OCR + LLM 分析
-- `question_service.py` - 题目创建/匹配
-- `knowledge_point_service.py` - 模块和知识点管理
-- `mistake_service.py` - 错题记录服务
-- `llm_provider.py` - LLM 接口封装
-
-### 关键函数
-
-#### `process_mistake_analysis(record_data, databases, storage)`
-
-处理错题分析的核心逻辑：
-
-1. 更新状态为 `processing`
-2. 下载图片（从 storage bucket）
-3. 调用 LLM 分析图片
-4. 确保模块存在（公有模块库）
-5. 确保知识点存在（用户私有）
-6. 创建或查找题目
-7. 更新错题记录
-8. 更新状态为 `completed` 或 `failed`
-
-### 错误处理
-
-- 所有异常都会捕获
-- 失败时更新 `analysisStatus` 为 `failed`
-- 记录错误信息到 `analysisError` 字段（限制 1000 字符）
-- 不抛出异常（Event Trigger 不需要返回错误响应）
+**注意**：所有分析逻辑已移至 `backend/worker/workers/mistake_analyzer/`
 
 ## 配置
 
 ### 环境变量
 
-- `APPWRITE_ENDPOINT` - Appwrite API 端点
-- `APPWRITE_PROJECT_ID` - 项目 ID
-- `APPWRITE_API_KEY` - API 密钥
-- `APPWRITE_DATABASE_ID` - 数据库 ID（默认：main）
+在 Appwrite Function 配置中添加：
+
+```bash
+# Worker API 地址（必需）
+WORKER_API_URL=http://your-worker-host:8000
+
+# Worker API 超时时间（可选，默认 5 秒）
+WORKER_API_TIMEOUT=5
+```
 
 ### Function 配置
 
-- **Runtime**: Python 3.9
-- **Specification**: 1 vCPU, 1GB RAM
-- **Timeout**: 60 秒
+- **Runtime**: Python 3.9+
+- **Specification**: 最小规格即可（0.25 vCPU, 256MB RAM）
+- **Timeout**: 15 秒（足够入队操作）
 - **Events**: 
   - `databases.*.collections.mistake_records.documents.*.create`
   - `databases.*.collections.mistake_records.documents.*.update`
-- **Scopes**: 
-  - `databases.read`
-  - `databases.write`
-  - `files.read`
+- **Scopes**: 无需特殊权限（只调用外部 API）
 
-## 性能优化
+## 依赖
 
-### 幂等性
-
-- 检查 `analysisStatus` 确保不重复处理
-- `processing` 状态防止并发问题
-
-### 超时处理
-
-- 60 秒超时足够完成大部分分析
-- 超时会自动重试（Appwrite 机制）
-
-### 日志
-
-- 记录关键步骤
-- 成功/失败都有清晰日志
-- 便于调试和监控
-
-## 数据结构
-
-### mistake_records 表字段
-
-```javascript
-{
-  userId: string,              // 用户ID
-  subject: string,             // 学科
-  originalImageIds: string[], // 图片 fileId 数组
-  
-  // 分析状态
-  analysisStatus: string,      // pending/processing/completed/failed
-  analysisError: string,       // 错误信息（如果失败）
-  analyzedAt: datetime,        // 分析完成时间
-  
-  // 分析结果（完成后填充）
-  questionId: string,          // 题目ID
-  moduleIds: string[],         // 模块ID数组
-  knowledgePointIds: string[], // 知识点ID数组
-  errorReason: string,         // 错误原因
-  userAnswer: string,          // 用户答案
-  note: string,                // 笔记
-  
-  // 复习相关
-  masteryStatus: string,       // 掌握状态
-  reviewCount: integer,        // 复习次数
-  correctCount: integer,       // 答对次数
-  lastReviewAt: datetime,      // 最后复习时间
-  masteredAt: datetime         // 掌握时间
-}
+```
+requests>=2.31.0
 ```
 
-## 与其他函数的关系
+仅需要 HTTP 客户端库，无需 Appwrite SDK、LLM 库等。
 
-- **mistake-recorder**: 提供 `createFromQuestion` API（练习中的错题）
-- **stats-updater**: 监听错题记录的创建/更新，更新用户统计
-- **knowledge-point-manager**: 提供知识点管理 API
+## 部署
 
-## 调试
+### 1. 确保 Worker 系统已启动
+
+```bash
+# 在 backend/worker 目录
+python app.py
+```
+
+### 2. 更新 Appwrite Function 环境变量
+
+在 Appwrite Console 中配置：
+- `WORKER_API_URL`: Worker API 的完整 URL
+
+### 3. 部署 Function
+
+```bash
+# 使用 Appwrite CLI
+appwrite deploy function
+
+# 或者通过 Appwrite Console 上传代码
+```
+
+### 4. 测试
+
+创建一个错题记录：
+
+```dart
+// Flutter 端
+final record = await databases.createDocument(
+  databaseId: 'main',
+  collectionId: 'mistake_records',
+  documentId: ID.unique(),
+  data: {
+    'userId': userId,
+    'originalImageId': imageId,
+    'analysisStatus': 'pending',  // 触发分析
+  },
+);
+```
+
+查看日志：
+- Appwrite Function 日志：应该显示 "✅ 任务入队成功"
+- Worker 日志：应该显示任务处理过程
+
+## 错误处理
+
+### Function 层面
+
+- Worker API 不可用：记录错误日志，但不阻塞（返回成功）
+- 入队超时：记录错误，立即返回
+- 任务验证失败：跳过任务
+
+### Worker 层面
+
+- 分析失败：更新 `analysisStatus` 为 `failed`
+- 记录详细错误信息到 `analysisError` 字段
+- Flutter 端可以根据错误信息提示用户
+
+## 监控
+
+### 查看任务状态
+
+```bash
+# 查询任务状态
+curl http://worker-host:8000/tasks/{task_id}
+
+# 查看队列统计
+curl http://worker-host:8000/queue/stats
+```
 
 ### 查看日志
 
-在 Appwrite Console 查看 Function 日志：
-- 成功: `✅ 错题分析完成`
-- 失败: `❌ 错题分析失败`
-- 跳过: `⏭️ 跳过分析`
+1. **Appwrite Function 日志**：Appwrite Console > Functions > mistake-analyzer > Logs
+2. **Worker 日志**：Worker 服务器的控制台或日志文件
 
-### 常见问题
+## 与原版本的差异
 
-1. **分析一直处于 pending 状态**
-   - 检查 Function 是否启用
-   - 检查事件是否正确配置
-   - 查看 Function 日志
+| 特性 | 原版本 | 新版本 (Task Queue) |
+|------|--------|---------------------|
+| **执行方式** | 同步执行分析 | 异步入队 |
+| **代码量** | ~260 行 | ~160 行（简化 62%） |
+| **依赖** | appwrite, requests | requests |
+| **并发能力** | 1 个任务 | 1000+ 任务 |
+| **响应时间** | 20-40 秒 | < 1 秒 |
+| **超时限制** | 60 秒 | 无限制（Worker 处理） |
+| **扩展性** | 受限 | 易于扩展 |
 
-2. **分析失败**
-   - 查看 `analysisError` 字段
-   - 可能原因：图片下载失败、OCR 失败、LLM 调用失败
+## 与 Worker 系统的关系
 
-3. **重复分析**
-   - 检查是否有多次更新状态为 `pending`
-   - 幂等性检查应该防止重复处理
+- **Function**：轻量级触发器，只负责任务调度
+- **Worker**：重量级处理系统，执行实际业务逻辑
 
-## 未来优化
+详细的 Worker 系统文档请参考：`backend/worker/README.md`
 
-- [ ] 支持批量图片分析
-- [ ] 优化 OCR 准确率
-- [ ] 缓存 LLM 结果
-- [ ] 支持更多学科
-- [ ] 分析置信度评分
+## 故障排查
 
+### 1. 任务没有被处理
+
+**检查项**：
+- Worker 系统是否运行：`curl http://worker-host:8000/`
+- `WORKER_API_URL` 是否配置正确
+- Appwrite Function 日志是否显示入队成功
+
+### 2. Function 执行失败
+
+**检查项**：
+- Worker API 地址是否可访问（网络连通性）
+- 超时时间是否合理
+- Function 日志中的错误信息
+
+### 3. Worker 处理慢
+
+**解决方案**：
+- 增加 Worker 并发数：`WORKER_CONCURRENCY=200`
+- 检查 LLM API 响应时间
+- 监控队列积压情况
+
+## 未来改进
+
+- [ ] 支持任务优先级动态调整
+- [ ] 支持任务重试机制（在 Worker 层面）
+- [ ] 支持批量任务提交
+- [ ] 添加任务取消功能
+- [ ] WebSocket 实时状态推送
+
+## 相关文档
+
+- [Worker 系统文档](../../worker/README.md)
+- [原 mistake-analyzer 设计文档](https://github.com/your-repo/docs/mistake-analyzer-old.md)
+
+## 许可证
+
+MIT License

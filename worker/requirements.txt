@@ -1,0 +1,29 @@
+--index-url https://mirrors.aliyun.com/pypi/simple/
+
+# FastAPI 和 ASGI 服务器
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# HTTP 客户端（异步）
+httpx>=0.25.0
+
+# Appwrite SDK
+appwrite>=4.0.0
+
+# 环境变量和配置
+python-dotenv>=1.0.0
+
+# HTTP 请求
+requests>=2.31.0
+
+# 火山引擎 ARK SDK
+volcengine-python-sdk>=1.0.107
+volcengine-python-sdk-ark-runtime>=1.0.0
+
+# 异步任务队列（可选，未来可添加 Redis）
+# redis>=5.0.0
+# aioredis>=2.0.0
+
+# 日志
+loguru>=0.7.0
+

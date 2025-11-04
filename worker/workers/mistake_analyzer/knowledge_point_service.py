@@ -97,20 +97,38 @@ def find_user_knowledge_point(
 def find_module(
     databases: Databases,
     subject: str,
-    name: str
+    name: str,
+    education_level: Optional[str] = None
 ) -> Optional[Dict]:
     """
     在公有模块库中查找模块
+    
+    Args:
+        databases: 数据库实例
+        subject: 学科（英文代码如 'math'，会自动转换为中文）
+        name: 模块名称
+        education_level: 教育阶段（可选）
     """
     try:
+        # 将学科英文代码转换为中文（数据库中存储的是中文）
+        from workers.mistake_analyzer.utils import get_subject_chinese_name
+        subject_chinese = get_subject_chinese_name(subject)
+        
+        queries = [
+            Query.equal('subject', subject_chinese),
+            Query.equal('name', name)
+        ]
+        
+        # 如果指定了教育阶段，添加过滤
+        if education_level:
+            queries.append(Query.equal('educationLevel', education_level))
+        
+        queries.append(Query.limit(1))
+        
         docs = databases.list_documents(
             database_id=DATABASE_ID,
             collection_id=COLLECTION_MODULES,
-            queries=[
-                Query.equal('subject', subject),
-                Query.equal('name', name),
-                Query.limit(1)
-            ]
+            queries=queries
         )
         
         documents = docs.get('documents', [])
@@ -125,48 +143,84 @@ def ensure_module(
     databases: Databases,
     subject: str,
     module_name: str,
+    user_id: str,
     description: Optional[str] = None
 ) -> Dict:
     """
-    确保公有模块存在
+    从现有模块中查找匹配的模块
     
-    模块是公有的学科分类，存储在 knowledge_points_library
-    如果不存在，则创建新模块
+    不创建新模块，只从 knowledge_points_library 中查找
+    如果找不到，返回"未分类"模块作为兜底
     
     Args:
         databases: 数据库实例
         subject: 学科
         module_name: 模块名称
-        description: 描述（可选）
+        user_id: 用户ID（用于确定学段）
+        description: 描述（未使用，保留参数兼容性）
+    
+    Returns:
+        找到的模块文档，如果找不到则返回"未分类"模块
     """
-    # 1. 查找是否已存在
+    # 获取用户学段信息
+    from workers.mistake_analyzer.utils import get_user_profile, get_education_level_from_grade
+    
+    user_profile = get_user_profile(databases, user_id)
+    user_grade = user_profile.get('grade') if user_profile else None
+    education_level = get_education_level_from_grade(user_grade)
+    
+    # 1. 先查找用户学段对应的精确匹配模块
     existing = find_module(
         databases=databases,
         subject=subject,
-        name=module_name
+        name=module_name,
+        education_level=education_level
     )
     
     if existing:
+        print(f"✓ 找到匹配模块: {module_name}（{subject}, {education_level}）")
         return existing
     
-    # 2. 创建新模块
-    module_data = {
-        'subject': subject,
-        'name': module_name,
-        'description': description or '',
-        'order': 0,  # 默认排序
-        'usageCount': 0,
-        'isActive': True
-    }
-    
-    doc = databases.create_document(
-        database_id=DATABASE_ID,
-        collection_id=COLLECTION_MODULES,
-        document_id=ID.unique(),
-        data=module_data
+    # 2. 如果不存在，再查找其他学段的同名模块
+    existing_any = find_module(
+        databases=databases,
+        subject=subject,
+        name=module_name,
+        education_level=None
     )
     
-    return doc
+    if existing_any:
+        print(f"⚠ 找到跨学段同名模块: {module_name}，学段为 {existing_any.get('educationLevel')}（用户学段: {education_level}）")
+        return existing_any
+    
+    # 3. 都找不到，查找"未分类"模块作为兜底
+    print(f"⚠ 未找到模块 '{module_name}'，使用'未分类'模块作为兜底")
+    
+    uncategorized = find_module(
+        databases=databases,
+        subject=subject,
+        name='未分类',
+        education_level=education_level
+    )
+    
+    if uncategorized:
+        print(f"✓ 使用未分类模块（{subject}, {education_level}）")
+        return uncategorized
+    
+    # 4. 如果连"未分类"都没有，尝试不限学段查找
+    uncategorized_any = find_module(
+        databases=databases,
+        subject=subject,
+        name='未分类',
+        education_level=None
+    )
+    
+    if uncategorized_any:
+        print(f"✓ 使用跨学段未分类模块（{subject}）")
+        return uncategorized_any
+    
+    # 5. 理论上不应该到这里，因为应该有预设的"未分类"模块
+    raise ValueError(f"错误：找不到学科 {subject} 的任何模块，包括'未分类'模块。请检查 knowledge_points_library 数据。")
 
 
 def create_user_knowledge_point(
@@ -209,6 +263,57 @@ def create_user_knowledge_point(
     )
     
     return doc
+
+
+def add_question_to_knowledge_point(
+    databases: Databases,
+    kp_id: str,
+    question_id: str
+) -> Dict:
+    """
+    将题目ID添加到知识点的 questionIds 列表中
+    
+    Args:
+        databases: 数据库实例
+        kp_id: 知识点ID
+        question_id: 题目ID
+    
+    Returns:
+        更新后的知识点文档
+    """
+    try:
+        # 获取现有知识点
+        kp = databases.get_document(
+            database_id=DATABASE_ID,
+            collection_id=COLLECTION_USER_KP,
+            document_id=kp_id
+        )
+        
+        # 获取现有的 questionIds 列表
+        existing_question_ids = kp.get('questionIds', []) or []
+        
+        # 如果题目ID已存在，不重复添加
+        if question_id in existing_question_ids:
+            print(f"题目 {question_id} 已在知识点 {kp_id} 中")
+            return kp
+        
+        # 添加新的题目ID
+        updated_question_ids = existing_question_ids + [question_id]
+        
+        # 更新知识点
+        doc = databases.update_document(
+            database_id=DATABASE_ID,
+            collection_id=COLLECTION_USER_KP,
+            document_id=kp_id,
+            data={'questionIds': updated_question_ids}
+        )
+        
+        print(f"✓ 已将题目 {question_id} 添加到知识点 {kp['name']}（总计 {len(updated_question_ids)} 道题）")
+        return doc
+        
+    except Exception as e:
+        print(f"添加题目到知识点失败: {str(e)}")
+        raise
 
 
 def update_knowledge_point_stats(
@@ -257,21 +362,40 @@ def update_knowledge_point_stats(
 
 def get_modules_by_subject(
     databases: Databases,
-    subject: str
+    subject: str,
+    education_level: Optional[str] = None
 ) -> list:
     """
     获取指定学科的所有模块
+    
+    Args:
+        databases: 数据库实例
+        subject: 学科（英文代码如 'math'，会自动转换为中文）
+        education_level: 教育阶段（可选），如果指定则只返回对应学段的模块
     """
     try:
+        # 将学科英文代码转换为中文（数据库中存储的是中文）
+        from workers.mistake_analyzer.utils import get_subject_chinese_name
+        subject_chinese = get_subject_chinese_name(subject)
+        
+        queries = [
+            Query.equal('subject', subject_chinese),
+            Query.equal('isActive', True)
+        ]
+        
+        # 如果指定了教育阶段，添加过滤
+        if education_level:
+            queries.append(Query.equal('educationLevel', education_level))
+        
+        queries.extend([
+            Query.order_asc('order'),
+            Query.limit(100)
+        ])
+        
         docs = databases.list_documents(
             database_id=DATABASE_ID,
             collection_id=COLLECTION_MODULES,
-            queries=[
-                Query.equal('subject', subject),
-                Query.equal('isActive', True),
-                Query.order_asc('order'),
-                Query.limit(100)
-            ]
+            queries=queries
         )
         
         return docs.get('documents', [])
