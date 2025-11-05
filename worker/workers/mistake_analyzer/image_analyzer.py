@@ -81,6 +81,93 @@ def clean_json_response(response: str) -> str:
     return response.strip()
 
 
+def parse_segmented_response(response: str) -> Dict:
+    """
+    解析分段标记格式的 LLM 响应
+    
+    格式示例：
+    ##TYPE##
+    choice
+    
+    ##SUBJECT##
+    math
+    
+    ##CONTENT##
+    题目内容...
+    
+    ##OPTIONS##
+    A. 选项1
+    B. 选项2
+    
+    ##END##
+    
+    Args:
+        response: LLM 返回的分段标记格式文本
+        
+    Returns:
+        {'content': str, 'type': str, 'options': list, 'subject': str}
+        
+    Raises:
+        ValueError: 解析失败
+    """
+    import re
+    
+    # 清理可能的代码块标记
+    response = response.strip()
+    if response.startswith('```'):
+        # 去除开头的代码块标记
+        lines = response.split('\n')
+        if lines[0].startswith('```'):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        response = '\n'.join(lines)
+    
+    # 使用正则提取各个部分（忽略前后空白）
+    sections = {}
+    
+    # 提取 TYPE
+    type_match = re.search(r'##TYPE##\s*\n\s*(\w+)', response, re.IGNORECASE)
+    if type_match:
+        sections['type'] = type_match.group(1).strip()
+    
+    # 提取 SUBJECT
+    subject_match = re.search(r'##SUBJECT##\s*\n\s*(\w+)', response, re.IGNORECASE)
+    if subject_match:
+        sections['subject'] = subject_match.group(1).strip()
+    
+    # 提取 CONTENT（到下一个标记为止）
+    content_match = re.search(r'##CONTENT##\s*\n(.*?)(?=##OPTIONS##|##END##)', response, re.DOTALL | re.IGNORECASE)
+    if content_match:
+        sections['content'] = content_match.group(1).strip()
+    
+    # 提取 OPTIONS（如果存在）
+    options_match = re.search(r'##OPTIONS##\s*\n(.*?)(?=##END##)', response, re.DOTALL | re.IGNORECASE)
+    if options_match:
+        options_text = options_match.group(1).strip()
+        if options_text:
+            # 按行分割选项，过滤空行
+            sections['options'] = [
+                line.strip() 
+                for line in options_text.split('\n') 
+                if line.strip()
+            ]
+        else:
+            sections['options'] = []
+    else:
+        sections['options'] = []
+    
+    # 验证必需字段
+    if 'type' not in sections:
+        raise ValueError("缺少 ##TYPE## 标记")
+    if 'subject' not in sections:
+        raise ValueError("缺少 ##SUBJECT## 标记")
+    if 'content' not in sections:
+        raise ValueError("缺少 ##CONTENT## 标记")
+    
+    return sections
+
+
 def fix_json_escaping(json_str: str) -> str:
     """
     修复 JSON 字符串中的转义问题
@@ -377,7 +464,7 @@ async def extract_question_content(
     """
     第一步：OCR 提取题目内容和学科识别（内部函数，异步）
     
-    从图片中识别文字、格式，并初步判断学科
+    使用分段标记格式，避免 LaTeX 转义地狱
     
     Args:
         image_base64: 纯 base64 字符串（不含前缀）
@@ -389,83 +476,138 @@ async def extract_question_content(
 
 **核心要求：**
 1. 所有数学、物理、化学公式必须使用 LaTeX 格式
-2. 行内公式用 \\( ... \\) 包裹
-3. 独立公式用 \\[ ... \\] 包裹，并前后加换行符
+2. 行内公式用 \( ... \) 包裹
+3. 独立公式用 \[ ... \] 包裹，并独立成行
 4. 识别完整的公式结构，包括分数、根号、积分、求和等
-5. 返回标准的 JSON 格式，所有反斜杠必须正确转义（LaTeX 的 \ 在 JSON 中写成 \\）
-
-**JSON 转义规则（重要）：**
-- LaTeX 命令 \frac 在 JSON 中写成 \\frac
-- 公式标记 \( 在 JSON 中写成 \\(
-- 公式标记 \[ 在 JSON 中写成 \\[
-- 换行符 写成 \\n"""
+5. 使用分段标记格式返回，LaTeX 公式直接书写，不需要任何转义"""
     
-    user_prompt = """请识别这张题目图片，提取以下信息：
+    user_prompt = r"""请识别这张题目图片，提取以下信息：
 
-1. **题目内容**（转换为 Markdown + LaTeX 格式）
-   - **所有公式必须用 LaTeX**：变量、表达式、方程式等都要用 LaTeX
-   - 行内公式：\\( ... \\)
-   - 独立公式：前后加换行，用 \\[ ... \\]
+**要提取的内容：**
+1. **题目内容**：转换为 Markdown + LaTeX 格式
+   - 所有公式用 LaTeX：变量、表达式、方程式等
+   - 行内公式：\( ... \)
+   - 独立公式：\[ ... \]（独立成行）
    - 保留原始结构和段落
    
-2. **题目类型**：choice(选择题)/fillBlank(填空题)/shortAnswer(简答题)/essay(论述题)
+2. **题目类型**：choice/fillBlank/shortAnswer/essay
 
-3. **选项**（仅选择题）：提取所有选项，公式也要用 LaTeX
+3. **选项**（仅选择题）：每行一个选项，公式也用 LaTeX
 
 4. **学科**：math/physics/chemistry/biology/chinese/english/history/geography/politics
 
-返回 JSON 格式（不要用代码块包裹）：
+**返回格式（分段标记，不要用代码块包裹）：**
 
-{
-    "content": "题目内容",
-    "type": "choice",
-    "options": ["选项1", "选项2", ...],
-    "subject": "学科代码"
-}
+##TYPE##
+题目类型
 
-**示例：**
+##SUBJECT##
+学科代码
 
-选择题（数学）：
-```json
-{
-    "content": "已知m、n是方程 \\\\( x^2 + 2020x + 7 = 0 \\\\) 的两个根，则 \\\\( (m^2 + 2019m + 6)(n^2 + 2021n + 8) \\\\) 的值为（）",
-    "type": "choice",
-    "options": ["A. 1", "B. 2", "C. 3", "D. 4"],
-    "subject": "math"
-}
-```
+##CONTENT##
+题目内容（Markdown + LaTeX，LaTeX 公式直接书写，不需要转义）
 
-填空题（物理）：
-```json
-{
-    "content": "质量为 \\\\( m \\\\) 的物体受力 \\\\( F \\\\)，根据牛顿第二定律 \\\\( F = ma \\\\)，则加速度 \\\\( a \\\\) = ______。",
-    "type": "fillBlank",
-    "options": [],
-    "subject": "physics"
-}
-```
+##OPTIONS##
+选项1
+选项2
+...
 
-解答题（数学）：
-```json
-{
-    "content": "计算定积分：\\n\\n\\\\[\\\\int_0^1 x^2 dx\\\\]\\n\\n请写出详细步骤。",
-    "type": "shortAnswer",
-    "options": [],
-    "subject": "math"
-}
-```
+##END##
 
-注意：JSON 中的反斜杠需要转义，所以 \( 写成 \\\\(，\frac 写成 \\\\frac
+**示例1 - 选择题（数学）：**
+
+##TYPE##
+choice
+
+##SUBJECT##
+math
+
+##CONTENT##
+已知 \( m \)、\( n \) 是方程 \( x^2 + 2020x + 7 = 0 \) 的两个根，则 \( (m^2 + 2019m + 6)(n^2 + 2021n + 8) \) 的值为（）
+
+##OPTIONS##
+A. 1
+B. 2
+C. 3
+D. 4
+
+##END##
+
+**示例2 - 填空题（物理）：**
+
+##TYPE##
+fillBlank
+
+##SUBJECT##
+physics
+
+##CONTENT##
+质量为 \( m \) 的物体受力 \( F \)，根据牛顿第二定律 \( F = ma \)，则加速度 \( a \) = ______。
+
+##OPTIONS##
+
+##END##
+
+**示例3 - 解答题（数学）：**
+
+##TYPE##
+shortAnswer
+
+##SUBJECT##
+math
+
+##CONTENT##
+计算定积分：
+
+\[
+\int_0^1 x^2 \, dx
+\]
+
+请写出详细步骤。
+
+##OPTIONS##
+
+##END##
+
+**示例4 - 矩阵（数学）：**
+
+##TYPE##
+shortAnswer
+
+##SUBJECT##
+math
+
+##CONTENT##
+求矩阵的行列式：
+
+\[
+\begin{bmatrix}
+1 & 2 & 3 \\
+4 & 5 & 6 \\
+7 & 8 & 9
+\end{bmatrix}
+\]
+
+##OPTIONS##
+
+##END##
 
 **LaTeX 常用语法：**
-- 分数：\\frac{a}{b}
+- 分数：\frac{a}{b}
 - 上标：x^2, x^{n+1}
 - 下标：x_i, a_{ij}
-- 根号：\\sqrt{x}, \\sqrt[3]{x}
-- 积分：\\int_a^b
-- 求和：\\sum_{i=1}^n
-- 希腊字母：\\alpha, \\beta, \\theta, \\pi
-- 运算符：\\times, \\div, \\pm, \\leq, \\geq"""
+- 根号：\sqrt{x}, \sqrt[3]{x}
+- 积分：\int_a^b
+- 求和：\sum_{i=1}^n
+- 希腊字母：\alpha, \beta, \theta, \pi
+- 运算符：\times, \div, \pm, \leq, \geq
+- 矩阵：\begin{bmatrix} ... \end{bmatrix}
+
+**重要：**
+- 标记符号必须独占一行
+- 行内公式用 \( ... \)，块级公式用 \[ ... \]
+- LaTeX 公式直接书写，不需要转义反斜杠
+- OPTIONS 部分如果是非选择题，留空即可"""
 
     response = None
     try:
@@ -480,15 +622,12 @@ async def extract_question_content(
             reasoning_effort="low"      # 设置推理深度为 low
         )
         
-        # 清理响应
-        cleaned_response = clean_json_response(response)
+        print(f"📋 LLM 返回的分段格式（前300字符）: {response[:300]}...")
         
-        print(f"📋 LLM 返回的 JSON（前300字符）: {cleaned_response[:300]}...")
+        # 解析分段标记格式
+        result = parse_segmented_response(response)
         
-        # 使用安全的 JSON 解析（带多重容错机制）
-        result = safe_json_loads(cleaned_response, "题目内容提取")
-        
-        print(f"✅ JSON 解析成功！题目类型: {result.get('type', '未知')}")
+        print(f"✅ 分段格式解析成功！题目类型: {result.get('type', '未知')}, 学科: {result.get('subject', '未知')}")
         
         # 验证和规范化
         if 'content' not in result or not result['content']:
@@ -500,20 +639,12 @@ async def extract_question_content(
         if 'subject' not in result or not result['subject']:
             result['subject'] = 'math'  # 默认数学
         
-        # 修正 LaTeX 转义（不管 LLM 输出什么，我们都统一修正）
-        result['content'] = fix_latex_escaping(result['content'])
-        
-        # 同时修正选项中的 LaTeX
-        if result.get('options'):
-            result['options'] = [fix_latex_escaping(opt) for opt in result['options']]
-        
         return result
         
-    except json.JSONDecodeError as e:
-        print(f"JSON 解析失败: {str(e)}, 响应: {response if response else '无响应'}")
-        raise ValueError(f"题目内容提取失败: {str(e)}")
     except Exception as e:
         print(f"题目提取失败: {str(e)}")
+        if response:
+            print(f"原始响应: {response[:500]}...")
         raise
 
 
@@ -972,5 +1103,6 @@ async def analyze_subject_and_knowledge_points(
     except Exception as e:
         print(f"知识点分析失败: {str(e)}")
         raise
+
 
 
