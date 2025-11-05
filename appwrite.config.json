@@ -959,6 +959,33 @@
                     "min": -1.7976931348623157e+308,
                     "max": 1.7976931348623157e+308,
                     "default": 5
+                },
+                {
+                    "key": "importance",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "normal",
+                    "encrypt": false
+                },
+                {
+                    "key": "solvingHint",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 500,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "primaryKnowledgePointIds",
+                    "type": "string",
+                    "required": false,
+                    "array": true,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
                 }
             ],
             "indexes": [
@@ -1159,6 +1186,13 @@
                     "array": false,
                     "format": "",
                     "default": null
+                },
+                {
+                    "key": "isImportant",
+                    "type": "boolean",
+                    "required": false,
+                    "array": false,
+                    "default": false
                 }
             ],
             "indexes": [

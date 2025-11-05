@@ -196,9 +196,12 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
             raise ValueError("未能识别知识点")
         
         knowledge_point_ids = []
+        kp_name_to_id = {}  # 用于后续查找主要考点ID
+        
         for kp_info in knowledge_points:
             kp_name = kp_info['name']
             kp_module_id = kp_info['moduleId']
+            kp_importance = kp_info.get('importance', 'normal')
             
             kp_doc = await asyncio.to_thread(
                 ensure_knowledge_point,
@@ -209,24 +212,48 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
                 knowledge_point_name=kp_name,
                 description=None
             )
-            knowledge_point_ids.append(kp_doc['$id'])
+            kp_id = kp_doc['$id']
+            knowledge_point_ids.append(kp_id)
+            kp_name_to_id[kp_name] = kp_id
+        
+        # 8. 获取主要考点ID列表（所有weight=1.0的知识点）
+        primary_kps = analysis_result.get('primaryKnowledgePoints', [])
+        primary_kp_ids = [kp_name_to_id[kp['name']] for kp in primary_kps if kp['name'] in kp_name_to_id]
         
         print(f"✓ 识别到 {len(knowledge_points)} 个知识点")
+        print(f"✓ 主要考点数量: {len(primary_kp_ids)}")
         
-        # 8. 更新题目，补充模块和知识点信息（学科已在创建时设置）
+        # 9. 更新题目，补充模块、知识点、解题提示等信息（学科已在创建时设置）
         print(f"更新题目信息: {question_id}")
         print(f"   - moduleIds: {module_ids}")
         print(f"   - knowledgePointIds: {knowledge_point_ids}")
+        
+        # 获取解题提示和知识点重要度（使用第一个主要考点的重要度）
+        solving_hint = analysis_result.get('solvingHint', '')
+        primary_kps_list = analysis_result.get('primaryKnowledgePoints', [])
+        importance = primary_kps_list[0].get('importance', 'normal') if primary_kps_list else 'normal'
+        
+        print(f"   - importance: {importance}")
+        if solving_hint:
+            print(f"   - solvingHint: {solving_hint[:50]}...")
+        
+        question_update_data = {
+            'moduleIds': module_ids,
+            'knowledgePointIds': knowledge_point_ids,
+            'primaryKnowledgePointIds': primary_kp_ids,  # 新增：主要考点ID列表
+            'importance': importance,  # 新增：知识点重要度
+        }
+        
+        # 只有当解题提示存在时才添加
+        if solving_hint:
+            question_update_data['solvingHint'] = solving_hint
         
         updated_question = await asyncio.to_thread(
             databases.update_document,
             database_id=DATABASE_ID,
             collection_id=QUESTIONS_COLLECTION,
             document_id=question_id,
-            data={
-                'moduleIds': module_ids,
-                'knowledgePointIds': knowledge_point_ids
-            }
+            data=question_update_data
         )
         print(f"✓ 成功更新题目: {question_id}")
         print(f"   - 更新后 subject: {updated_question.get('subject')}")
@@ -246,7 +273,7 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
                 print(f"⚠️ 更新知识点 {kp_id} 的题目列表失败: {str(e)}")
                 # 不影响主流程，继续执行
         
-        # 10. 更新错题记录（补充模块和知识点信息）
+        # 10. 更新错题记录（补充模块、知识点信息）
         update_data = {
             'moduleIds': module_ids,
             'knowledgePointIds': knowledge_point_ids,

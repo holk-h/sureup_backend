@@ -630,6 +630,11 @@ async def analyze_subject_and_knowledge_points(
     
     根据用户学段提供相应的模块列表和知识点列表给 LLM
     
+    新增功能（v3.0）：
+    - 计算知识点权重（主要考点 vs 次要考点）
+    - 判断知识点重要度（high/basic/normal）
+    - 生成解题提示
+    
     Args:
         content: 题目内容（Markdown 格式）
         question_type: 题目类型
@@ -642,7 +647,16 @@ async def analyze_subject_and_knowledge_points(
             'subject': str,
             'modules': list[str],
             'moduleIds': list[str],
-            'knowledgePoints': list[{'name': str, 'module': str, 'moduleId': str}]
+            'knowledgePoints': list[{
+                'name': str, 
+                'module': str, 
+                'moduleId': str,
+                'weight': float,       # 新增：知识点权重 0.2-1.0
+                'importance': str      # 新增：重要度 high/basic/normal
+            }],
+            'primaryKnowledgePointId': str,           # 新增：主要考点ID
+            'knowledgePointWeights': dict,            # 新增：{kpId: weight}
+            'solvingHint': str                        # 新增：解题提示
         }
     """
     # 获取该学科在用户学段的模块列表
@@ -655,8 +669,9 @@ async def analyze_subject_and_knowledge_points(
         modules_list = []
         for mod in available_modules:
             modules_dict[mod['name']] = mod['$id']  # 保存模块ID映射
+            # 使用括号形式展示描述，让 LLM 理解模块含义，但返回时只填写模块名
             if mod.get('description'):
-                modules_list.append(f"  - {mod['name']}：{mod['description']}")
+                modules_list.append(f"  - {mod['name']} ({mod['description']})")
             else:
                 modules_list.append(f"  - {mod['name']}")
         modules_text = "\n".join(modules_list)
@@ -666,10 +681,19 @@ async def analyze_subject_and_knowledge_points(
 要求：
 - 必须从提供的模块列表中选择，不能创造新模块
 - 知识点使用简洁的标准术语
+- 区分主要考点和次要考点
+- 判断知识点的重要程度
+- 生成简洁的解题提示
 
 分析指导：
 1. 模块选择：找最相关的模块，优先选择题目主要考查的内容所在模块
-2. 知识点提取：识别一个或多个核心知识点，避免过度细分或过度概括"""
+2. 知识点提取：识别一个或多个核心知识点，避免过度细分或过度概括
+3. 权重判断：主要考点weight=1.0，次要考点weight=0.3-0.5，相关但不重要的weight=0.2
+4. 重要度判断：
+   - high：高频考点（考试常考的核心知识）
+   - basic：基础知识点（前置必会的内容）
+   - normal：普通考点
+5. 解题提示：总结关键解题思路，如"看到XX条件，优先想XX方法"""
     
     available_modules_hint = ""
     if modules_text:
@@ -684,7 +708,7 @@ async def analyze_subject_and_knowledge_points(
     from workers.mistake_analyzer.utils import get_subject_chinese_name
     subject_chinese = get_subject_chinese_name(subject)
     
-    user_prompt = f"""分析这道{subject_chinese}题目的模块和知识点：
+    user_prompt = f"""分析这道{subject_chinese}题目的模块、知识点分类和解题提示：
 
 **题目：**
 {content}
@@ -694,31 +718,84 @@ async def analyze_subject_and_knowledge_points(
 {{
     "modules": ["模块名称"],
     "knowledgePoints": [
-        {{"name": "知识点名", "module": "模块名称"}}
-    ]
+        {{
+            "name": "知识点名", 
+            "module": "模块名称",
+            "category": "primary",
+            "importance": "high"
+        }}
+    ],
+    "solvingHint": "解题提示"
 }}
+
+**字段说明：**
+- modules: 模块名称列表
+  - **重要**：只填写模块的名称，不要包含括号及括号内的描述
+  - **重要**：例如上面列表中的"二次函数 (二次函数的图像与性质)"，你只需要填写"二次函数"
+  - **重要**：必须从"可用模块列表"中选择（括号前的模块名）
+- category: 知识点分类
+  - primary：主要考点（题目核心考查的，1-2个）
+  - secondary：次要考点（题目涉及但不是重点）
+  - related：相关考点（背景知识，不重要）
+- importance: 知识点重要度
+  - high：高频考点（考试常考）
+  - basic：基础知识点（前置必会）
+  - normal：普通考点
+- solvingHint: 解题提示（一句话，让学生看到就知道怎么做）
+  - 要求：简洁、直接、实用，点出关键思路或方法
+  - 不要说"看到XX优先想XX"这种套话，直接说怎么做
+  - 例如："判别式大于0时有两个不同实根"、"对称轴公式是x=-b/2a"、"先受力分析再列牛顿第二定律方程"
 
 **注意：**
 - 大多数题目只涉及1个模块，跨模块综合题较少（不是没有，需要自行判断）
 - 每个知识点必须归属一个模块
+- 主要考点（category=primary）通常只有1-2个
+- **返回时**：modules 和 knowledgePoints 中的 module 字段只填写模块名称（括号前的部分），不要包含括号和描述
 
-**示例（单模块）：**
+**示例1（单模块，单主要考点）：**
 {{
-    "modules": ["微积分"],
+    "modules": ["二次函数"],
     "knowledgePoints": [
-        {{"name": "定积分", "module": "微积分"}},
-        {{"name": "微积分基本定理", "module": "微积分"}}
-    ]
+        {{
+            "name": "判别式",
+            "module": "二次函数",
+            "category": "primary",
+            "importance": "high"
+        }},
+        {{
+            "name": "一元二次方程",
+            "module": "二次函数",
+            "category": "secondary",
+            "importance": "basic"
+        }}
+    ],
+    "solvingHint": "判别式Δ=b²-4ac，Δ>0有两个不同实根，Δ=0有两个相等实根，Δ<0无实根"
 }}
 
-**示例（跨模块）：**
+**示例2（跨模块，多主要考点）：**
 {{
     "modules": ["力学", "运动学"],
     "knowledgePoints": [
-        {{"name": "牛顿第二定律", "module": "力学"}},
-        {{"name": "匀变速直线运动", "module": "运动学"}},
-        {{"name": "受力分析", "module": "力学"}}
-    ]
+        {{
+            "name": "牛顿第二定律",
+            "module": "力学",
+            "category": "primary",
+            "importance": "high"
+        }},
+        {{
+            "name": "匀变速直线运动",
+            "module": "运动学",
+            "category": "primary",
+            "importance": "high"
+        }},
+        {{
+            "name": "受力分析",
+            "module": "力学",
+            "category": "secondary",
+            "importance": "basic"
+        }}
+    ],
+    "solvingHint": "先画出受力图进行受力分析，然后根据F=ma列方程，结合运动学公式求解"
 }}"""
 
     response = None
@@ -729,7 +806,8 @@ async def analyze_subject_and_knowledge_points(
             system_prompt=system_prompt,
             temperature=0.,
             max_tokens=4000,
-            thinking_enabled=False,
+            thinking_enabled=True,
+            reasoning_effort="medium"
         )
         
         # 清理响应
@@ -759,6 +837,20 @@ async def analyze_subject_and_knowledge_points(
         validated_module_ids = {}  # {module_name: module_id}
         
         for module_name in modules_list:
+            # 容错处理：处理可能包含的额外格式
+            original_name = module_name
+            
+            # 1. 如果包含括号（如"模块名 (描述)"），只取括号前的部分
+            if '(' in module_name or '（' in module_name:
+                module_name = module_name.split('(')[0].split('（')[0].strip()
+            
+            # 2. 如果包含冒号（如"模块名：描述"），只取冒号前的部分
+            if '：' in module_name or ':' in module_name:
+                module_name = module_name.split('：')[0].split(':')[0].strip()
+            
+            if original_name != module_name:
+                print(f"⚠ 自动修正模块名: '{original_name}' -> '{module_name}'")
+            
             if module_name in modules_dict:
                 validated_modules.append(module_name)
                 validated_module_ids[module_name] = modules_dict[module_name]
@@ -780,10 +872,12 @@ async def analyze_subject_and_knowledge_points(
             knowledge_points = []
         
         if not knowledge_points:
-            knowledge_points = [{'name': '未分类', 'module': validated_modules[0]}]
+            knowledge_points = [{'name': '未分类', 'module': validated_modules[0], 'category': 'primary', 'importance': 'normal'}]
         
         # 处理每个知识点
         processed_kps = []
+        primary_kps = []  # 主要考点列表（category=primary的）
+        
         for kp in knowledge_points:
             if not isinstance(kp, dict):
                 print(f"⚠ 知识点格式错误，跳过: {kp}")
@@ -791,6 +885,31 @@ async def analyze_subject_and_knowledge_points(
             
             kp_name = kp.get('name', '')
             kp_module = kp.get('module', validated_modules[0])
+            kp_category = kp.get('category', 'secondary')  # 默认次要
+            kp_importance = kp.get('importance', 'normal')  # 默认普通
+            
+            # 容错处理：处理可能包含的额外格式
+            if isinstance(kp_module, str):
+                original_module = kp_module
+                
+                # 1. 如果包含括号（如"模块名 (描述)"），只取括号前的部分
+                if '(' in kp_module or '（' in kp_module:
+                    kp_module = kp_module.split('(')[0].split('（')[0].strip()
+                
+                # 2. 如果包含冒号（如"模块名：描述"），只取冒号前的部分
+                if '：' in kp_module or ':' in kp_module:
+                    kp_module = kp_module.split('：')[0].split(':')[0].strip()
+                
+                if original_module != kp_module:
+                    print(f"⚠ 自动修正知识点模块名: '{original_module}' -> '{kp_module}'")
+            
+            # 确保 category 是有效值
+            if kp_category not in ['primary', 'secondary', 'related']:
+                kp_category = 'secondary'
+            
+            # 确保 importance 是有效值
+            if kp_importance not in ['high', 'basic', 'normal']:
+                kp_importance = 'normal'
             
             if not kp_name:
                 continue
@@ -806,22 +925,45 @@ async def analyze_subject_and_knowledge_points(
                 existing_kp_names = get_existing_knowledge_points_by_module(module_id, user_id, databases)
                 
                 if kp_name in existing_kp_names:
-                    print(f"  ✓ 知识点匹配: {kp_name} ({kp_module})")
+                    print(f"  ✓ 知识点匹配: {kp_name} ({kp_module}) [{kp_category}] importance={kp_importance}")
                 else:
-                    print(f"  + 新知识点: {kp_name} ({kp_module})")
+                    print(f"  + 新知识点: {kp_name} ({kp_module}) [{kp_category}] importance={kp_importance}")
+            
+            # 记录主要考点（category=primary的）
+            if kp_category == 'primary':
+                primary_kps.append({
+                    'name': kp_name,
+                    'module': kp_module,
+                    'moduleId': module_id,
+                    'category': kp_category,
+                    'importance': kp_importance
+                })
             
             processed_kps.append({
                 'name': kp_name,
                 'module': kp_module,
-                'moduleId': module_id
+                'moduleId': module_id,
+                'category': kp_category,
+                'importance': kp_importance
             })
+        
+        # ===== 第四步：提取解题提示 =====
+        solving_hint = result.get('solvingHint', '')
+        if not solving_hint or not isinstance(solving_hint, str):
+            solving_hint = ''
+        solving_hint = solving_hint.strip()[:200]  # 限制长度
+        
+        print(f"📝 解题提示: {solving_hint[:50]}..." if solving_hint else "⚠ 未提供解题提示")
+        print(f"🎯 主要考点数量: {len(primary_kps)}")
         
         # 返回处理后的结果
         return {
             'subject': subject,
             'modules': validated_modules,
             'moduleIds': list(validated_module_ids.values()),
-            'knowledgePoints': processed_kps
+            'knowledgePoints': processed_kps,
+            'primaryKnowledgePoints': primary_kps,  # 主要考点列表（weight=1.0的）
+            'solvingHint': solving_hint  # 解题提示
         }
         
     except json.JSONDecodeError as e:
