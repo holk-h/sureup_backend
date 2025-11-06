@@ -338,29 +338,6 @@ math
 
 ##END##
 
-**示例4 - 矩阵（数学）：**
-
-##TYPE##
-shortAnswer
-
-##SUBJECT##
-math
-
-##CONTENT##
-求矩阵的行列式：
-
-\[
-\begin{bmatrix}
-1 & 2 & 3 \\
-4 & 5 & 6 \\
-7 & 8 & 9
-\end{bmatrix}
-\]
-
-##OPTIONS##
-
-##END##
-
 **LaTeX 常用语法：**
 - 分数：\frac{a}{b}
 - 上标：x^2, x^{n+1}

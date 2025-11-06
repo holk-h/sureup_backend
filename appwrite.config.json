@@ -271,6 +271,34 @@
                 "APPWRITE_DATABASE_ID": "main",
                 "APPWRITE_USERS_COLLECTION_ID": "profiles"
             }
+        },
+        {
+            "$id": "ai-accumulated-analyzer",
+            "name": "AI积累错题分析 (L2)",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
+            "schedule": "",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/ai-accumulated-analyzer",
+            "variables": {
+                "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
+                "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
+                "APPWRITE_API_KEY": "",
+                "APPWRITE_DATABASE_ID": "main",
+                "WORKER_API_URL": "http://localhost:8000"
+            }
         }
     ],
     "tablesDB": [
@@ -1250,6 +1278,14 @@
                     "required": false,
                     "array": false,
                     "default": false
+                },
+                {
+                    "key": "accumulatedAnalyzedAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
                 }
             ],
             "indexes": [
@@ -1303,6 +1339,16 @@
                     "columns": [
                         "userId",
                         "analysisStatus"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "userId_accumulatedAnalyzedAt_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "accumulatedAnalyzedAt"
                     ],
                     "orders": []
                 }
@@ -2177,6 +2223,149 @@
                         "isCompleted"
                     ],
                     "orders": []
+                }
+            ]
+        },
+        {
+            "$id": "accumulated_analyses",
+            "$permissions": [
+                "create(\"users\")",
+                "read(\"any\")",
+                "update(\"any\")"
+            ],
+            "databaseId": "main",
+            "name": "积累错题分析",
+            "enabled": true,
+            "rowSecurity": true,
+            "columns": [
+                {
+                    "key": "userId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "status",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "pending",
+                    "encrypt": false
+                },
+                {
+                    "key": "mistakeCount",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10000,
+                    "default": 0
+                },
+                {
+                    "key": "daysSinceLastReview",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 1000,
+                    "default": 0
+                },
+                {
+                    "key": "analysisContent",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 10000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "summary",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 2000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "mistakeIds",
+                    "type": "string",
+                    "required": false,
+                    "array": true,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "startedAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "completedAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                }
+            ],
+            "indexes": [
+                {
+                    "key": "userId_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId"
+                    ],
+                    "orders": [
+                        "ASC"
+                    ]
+                },
+                {
+                    "key": "status_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "status"
+                    ],
+                    "orders": [
+                        "ASC"
+                    ]
+                },
+                {
+                    "key": "userId_status_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "status"
+                    ],
+                    "orders": [
+                        "ASC",
+                        "ASC"
+                    ]
+                },
+                {
+                    "key": "userId_createdAt_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "$createdAt"
+                    ],
+                    "orders": [
+                        "ASC",
+                        "DESC"
+                    ]
                 }
             ]
         }

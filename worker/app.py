@@ -19,6 +19,7 @@ from task_queue.base import TaskQueue
 from tasks import TaskBase, TaskResponse, TaskStatus, QueueStats, task_registry
 from workers.mistake_analyzer import MistakeAnalyzerWorker
 from workers.daily_task_generator import DailyTaskGeneratorWorker
+from workers.accumulated_mistakes_analyzer import AccumulatedMistakesAnalyzerWorker
 
 
 # ========== 全局变量 ==========
@@ -47,6 +48,7 @@ def register_workers():
     """注册所有 worker"""
     task_registry.register('mistake_analyzer', MistakeAnalyzerWorker)
     task_registry.register('daily_task_generator', DailyTaskGeneratorWorker)
+    task_registry.register('accumulated_mistakes_analyzer', AccumulatedMistakesAnalyzerWorker)
     logger.info(f"已注册任务类型: {task_registry.list_task_types()}")
 
 

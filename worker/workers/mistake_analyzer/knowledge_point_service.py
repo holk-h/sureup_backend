@@ -459,6 +459,45 @@ def get_user_knowledge_points_by_module(
         return []
 
 
+def get_user_knowledge_points_by_subject(
+    databases: Databases,
+    user_id: str,
+    subject: str
+) -> list:
+    """
+    获取用户在指定学科下的所有知识点
+    
+    Args:
+        databases: 数据库实例
+        user_id: 用户ID
+        subject: 学科（中文或英文代码）
+        
+    Returns:
+        知识点文档列表，按模块分组
+    """
+    try:
+        # 将学科英文代码转换为中文（如果需要）
+        from workers.mistake_analyzer.utils import get_subject_chinese_name
+        subject_chinese = get_subject_chinese_name(subject)
+        
+        # 获取用户在该学科下的所有知识点
+        docs = databases.list_documents(
+            database_id=DATABASE_ID,
+            collection_id=COLLECTION_USER_KP,
+            queries=[
+                Query.equal('userId', user_id),
+                Query.equal('subject', subject_chinese),
+                Query.limit(1000)  # 增加限制以获取更多知识点
+            ]
+        )
+        
+        return docs.get('documents', [])
+        
+    except Exception as e:
+        print(f"获取学科知识点列表失败: {str(e)}")
+        return []
+
+
 def _ensure_review_state(
     databases: Databases,
     user_id: str,

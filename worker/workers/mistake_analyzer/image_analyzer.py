@@ -10,6 +10,7 @@
 import os
 import json
 import base64
+import asyncio
 from typing import Dict, List, Optional
 from appwrite.client import Client
 from appwrite.services.databases import Databases
@@ -750,29 +751,6 @@ math
 
 ##END##
 
-**示例4 - 矩阵（数学）：**
-
-##TYPE##
-shortAnswer
-
-##SUBJECT##
-math
-
-##CONTENT##
-求矩阵的行列式：
-
-\[
-\begin{{bmatrix}}
-1 & 2 & 3 \\
-4 & 5 & 6 \\
-7 & 8 & 9
-\end{{bmatrix}}
-\]
-
-##OPTIONS##
-
-##END##
-
 **LaTeX 常用语法：**
 - 分数：\frac{{a}}{{b}}
 - 上标：x^2, x^{{n+1}}
@@ -991,19 +969,64 @@ async def analyze_subject_and_knowledge_points(
                 modules_list.append(f"  - {mod['name']}")
         modules_text = "\n".join(modules_list)
     
+    # 获取用户在该学科下的所有已有知识点（防止重复）
+    from workers.mistake_analyzer.knowledge_point_service import get_user_knowledge_points_by_subject
+    existing_knowledge_points = []
+    if databases:
+        try:
+            kp_docs = await asyncio.to_thread(
+                get_user_knowledge_points_by_subject,
+                databases=databases,
+                user_id=user_id,
+                subject=subject
+            )
+            existing_knowledge_points = kp_docs
+        except Exception as e:
+            print(f"⚠️ 获取用户已有知识点失败: {str(e)}")
+    
+    # 构建已有知识点列表文本（按模块分组）
+    knowledge_points_text = ""
+    if existing_knowledge_points:
+        # 按模块分组
+        kp_by_module = {}
+        for kp in existing_knowledge_points:
+            module_id = kp.get('moduleId')
+            if module_id:
+                if module_id not in kp_by_module:
+                    kp_by_module[module_id] = []
+                kp_by_module[module_id].append(kp['name'])
+        
+        # 构建文本
+        if kp_by_module:
+            kp_text_list = []
+            for mod in available_modules:
+                mod_id = mod['$id']
+                mod_name = mod['name']
+                if mod_id in kp_by_module:
+                    kps = kp_by_module[mod_id]
+                    kp_text_list.append(f"**{mod_name}**：{', '.join(kps)}")
+            
+            if kp_text_list:
+                knowledge_points_text = "\n".join(kp_text_list)
+                print(f"✓ 已获取 {len(existing_knowledge_points)} 个已有知识点，供 LLM 参考以防止重复")
+    
     system_prompt = """你是学科知识点分析专家，专注于精确识别题目的考点。
 
 核心原则：
 - 必须从提供的模块列表中选择
+- **优先使用已有知识点**：如果用户已经有相同或相近的知识点，直接使用，避免创建重复或相似的知识点
 - **知识点要精确**：使用标准学术术语，避免模糊表达
 - 区分题目角色（category）和知识点重要性（importance）
 
 分析要点：
 1. **模块选择**：选择题目主要考查内容所在的模块（通常1个，综合题可能2个）
 2. **知识点提取**（关键！）：
+   - **首先检查已有知识点列表**：如果题目考查的内容在用户已有知识点中存在，直接使用该知识点名称
+   - 只有当确实是新的知识点时，才创建新知识点
    - 必须精确、具体，如"一元二次方程判别式"而非"方程"
    - 避免过度概括（太宽泛）或过度细分（太琐碎）
    - 通常1-3个知识点，主要考点1-2个
+   - **防止重复**：避免创建与已有知识点含义相同但表述略有不同的知识点
 3. **category（题目角色）**：
    - primary：这道题的主要考点，直接考查的核心内容
    - secondary：次要考点，间接涉及的内容
@@ -1031,6 +1054,16 @@ async def analyze_subject_and_knowledge_points(
     else:
         available_modules_hint = "\n\n**注意**：系统暂无模块数据，请使用\"未分类\"。"
     
+    # 构建已有知识点提示
+    existing_kp_hint = ""
+    if knowledge_points_text:
+        existing_kp_hint = f"""
+
+**用户已有的知识点（优先使用这些，避免重复）：**
+{knowledge_points_text}
+
+⚠️ **重要**：提取知识点时，请先检查上面的已有知识点列表。如果题目考查的内容与已有知识点相同或相近，请直接使用已有的知识点名称，不要创建新的重复知识点。"""
+    
     # 获取学科中文名称
     from workers.mistake_analyzer.utils import get_subject_chinese_name
     subject_chinese = get_subject_chinese_name(subject)
@@ -1040,6 +1073,7 @@ async def analyze_subject_and_knowledge_points(
 **题目：**
 {content}
 {available_modules_hint}
+{existing_kp_hint}
 
 **返回格式（分段标记，不要用代码块）：**
 
@@ -1061,7 +1095,10 @@ async def analyze_subject_and_knowledge_points(
 **字段说明：**
 1. **MODULES**：只填模块名（不含括号描述），必须从上面列表中选择
 2. **KNOWLEDGE_POINTS**：每行一个，格式为 `知识点名|模块名|category|importance`
-   - **知识点名**：精确、具体，如"一元二次方程判别式"而非"方程"
+   - **知识点名**：
+     * **优先使用已有知识点**：如果用户已有知识点中存在相同或相近的知识点，直接使用已有的名称
+     * 只有当确实是新知识点时，才填写新的知识点名称
+     * 必须精确、具体，如"一元二次方程判别式"而非"方程"
    - **category**（题目中的角色）：primary（主要考点）/ secondary（次要）/ related（相关）
    - **importance**（知识点重要性）：high（高频考点）/ basic（基础）/ normal（普通）
 3. **SOLVING_HINT**：分【本题解法】和【方法论】两部分

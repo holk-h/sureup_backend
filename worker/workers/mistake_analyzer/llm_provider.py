@@ -191,7 +191,7 @@ class VolcengineLLMProvider:
         reasoning_effort: Optional[str] = None,
         stream: bool = False,
         **kwargs
-    ) -> str:
+    ) -> Union[str, Any]:
         """使用火山引擎 SDK 进行文本对话"""
         
         async def _make_request():
@@ -222,23 +222,32 @@ class VolcengineLLMProvider:
             params.update(kwargs)
             params.update(self.extra_params)
             
-            # 在事件循环中调用同步的 SDK
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(**params)
-            )
-            
-            # 提取响应内容
-            content = response.choices[0].message.content
-            
-            # 记录思考 token 使用（如果有）
-            if hasattr(response, 'usage') and hasattr(response.usage, 'reasoning_tokens'):
-                reasoning_tokens = response.usage.reasoning_tokens
-                if reasoning_tokens > 0:
-                    print(f"[推理模式] 使用了 {reasoning_tokens} 个推理 tokens")
-            
-            return content
+            if stream:
+                # 流式输出：返回生成器
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(**params)
+                )
+                return response
+            else:
+                # 非流式输出：返回完整内容
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(**params)
+                )
+                
+                # 提取响应内容
+                content = response.choices[0].message.content
+                
+                # 记录思考 token 使用（如果有）
+                if hasattr(response, 'usage') and hasattr(response.usage, 'reasoning_tokens'):
+                    reasoning_tokens = response.usage.reasoning_tokens
+                    if reasoning_tokens > 0:
+                        print(f"[推理模式] 使用了 {reasoning_tokens} 个推理 tokens")
+                
+                return content
         
         return await self._retry_request(_make_request)
     
