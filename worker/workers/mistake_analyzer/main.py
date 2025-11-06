@@ -25,7 +25,7 @@ from appwrite.services.storage import Storage
 from appwrite.exception import AppwriteException
 
 from workers.mistake_analyzer.image_analyzer import extract_question_content, analyze_subject_and_knowledge_points
-from workers.mistake_analyzer.question_service import create_question
+from workers.mistake_analyzer.question_service import create_question, get_question
 from workers.mistake_analyzer.knowledge_point_service import ensure_knowledge_point, ensure_module, add_question_to_knowledge_point
 from workers.mistake_analyzer.profile_stats_service import update_profile_stats_on_mistake_created
 from workers.mistake_analyzer.utils import get_databases, get_storage
@@ -90,10 +90,36 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
     record_id = record_data['$id']
     user_id = record_data['userId']
     original_image_id = record_data.get('originalImageId')
+    wrong_reason = record_data.get('wrongReason')  # 获取用户反馈的错误原因
+    question_id = record_data.get('questionId')  # 获取关联的题目ID（如果是重新识别）
     
     # 验证必要字段
     if not original_image_id:
         raise ValueError("错题记录缺少图片ID")
+    
+    # 如果有用户反馈且有题目ID，说明这是重新识别，需要读取上次的识别结果
+    previous_result = None
+    if wrong_reason and question_id:
+        print(f"⚠️ 用户反馈识别错误: {wrong_reason}")
+        print(f"开始重新识别，从数据库读取上次识别结果...")
+        try:
+            # 从数据库读取上次识别的题目
+            previous_question = await asyncio.to_thread(
+                get_question,
+                databases=databases,
+                question_id=question_id
+            )
+            # 构造 previous_result 格式
+            previous_result = {
+                'content': previous_question.get('content', ''),
+                'type': previous_question.get('type', ''),
+                'subject': previous_question.get('subject', ''),
+                'options': previous_question.get('options', [])
+            }
+            print(f"✓ 读取到上次识别结果（题目类型: {previous_result['type']}, 学科: {previous_result['subject']}）")
+        except Exception as e:
+            print(f"⚠️ 读取上次识别结果失败: {str(e)}，将不使用历史结果")
+            previous_result = None
     
     # 1. 更新状态为 processing
     await update_record_status(databases, record_id, 'processing')
@@ -108,29 +134,51 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
         
         # 3. 第一步：OCR 提取题目内容和学科识别
         print("开始OCR识别和学科识别...")
-        step1_result = await extract_question_content(image_base64)
+        step1_result = await extract_question_content(
+            image_base64, 
+            user_feedback=wrong_reason,
+            previous_result=previous_result
+        )
         print(f"✓ OCR完成，题目类型: {step1_result.get('type', '未知')}，学科: {step1_result.get('subject', '未知')}")
         
-        # 3.1 创建基本题目记录（包含 OCR 提取的内容和学科）
-        print("创建基本题目记录...")
-        basic_question = await asyncio.to_thread(
-            create_question,
-            databases=databases,
-            subject=step1_result['subject'],  # 第一步已识别学科
-            module_ids=[],      # 暂时为空，后续会更新
-            knowledge_point_ids=[],  # 暂时为空，后续会更新
-            content=step1_result['content'],
-            question_type=step1_result['type'],
-            difficulty=3,
-            options=step1_result.get('options'),
-            answer='',
-            explanation='',
-            image_ids=[original_image_id],
-            created_by=user_id,
-            source='ocr'
-        )
-        question_id = basic_question['$id']
-        print(f"✓ 创建基本题目: {question_id}")
+        # 3.1 创建或更新题目记录
+        if question_id:
+            # 重新识别：更新已有题目
+            print(f"更新已有题目记录: {question_id}")
+            basic_question = await asyncio.to_thread(
+                databases.update_document,
+                database_id=DATABASE_ID,
+                collection_id=QUESTIONS_COLLECTION,
+                document_id=question_id,
+                data={
+                    'subject': step1_result['subject'],
+                    'content': step1_result['content'],
+                    'type': step1_result['type'],
+                    'options': step1_result.get('options', [])
+                }
+            )
+            print(f"✓ 题目已更新: {question_id}")
+        else:
+            # 首次识别：创建新题目
+            print("创建基本题目记录...")
+            basic_question = await asyncio.to_thread(
+                create_question,
+                databases=databases,
+                subject=step1_result['subject'],  # 第一步已识别学科
+                module_ids=[],      # 暂时为空，后续会更新
+                knowledge_point_ids=[],  # 暂时为空，后续会更新
+                content=step1_result['content'],
+                question_type=step1_result['type'],
+                difficulty=3,
+                options=step1_result.get('options'),
+                answer='',
+                explanation='',
+                image_ids=[original_image_id],
+                created_by=user_id,
+                source='ocr'
+            )
+            question_id = basic_question['$id']
+            print(f"✓ 创建基本题目: {question_id}")
         
         # 3.2 OCR 完成，更新状态为 ocrOK 并关联题目ID和学科
         await update_record_status(
@@ -281,6 +329,11 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
         }
         
         # 11. 更新状态为 completed
+        # 如果是重新识别，清除 wrongReason
+        if wrong_reason:
+            update_data['wrongReason'] = None
+            print(f"✓ 重新识别完成，已清除用户反馈")
+        
         await update_record_status(
             databases=databases,
             record_id=record_id,

@@ -521,6 +521,29 @@
                     "size": 20,
                     "default": "normal",
                     "encrypt": false
+                },
+                {
+                    "key": "dailyTaskReminderEnabled",
+                    "type": "boolean",
+                    "required": false,
+                    "array": false,
+                    "default": false
+                },
+                {
+                    "key": "reviewReminderEnabled",
+                    "type": "boolean",
+                    "required": false,
+                    "array": false,
+                    "default": false
+                },
+                {
+                    "key": "reviewReminderTime",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 10,
+                    "default": null,
+                    "encrypt": false
                 }
             ],
             "indexes": [
@@ -1127,6 +1150,15 @@
                 },
                 {
                     "key": "analysisError",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 1000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "wrongReason",
                     "type": "string",
                     "required": false,
                     "array": false,

@@ -496,7 +496,9 @@ def create_fallback_result(subject: str, error_msg: str = '') -> Dict:
 async def analyze_mistake_image(
     image_base64: str,
     user_id: str,
-    databases: Optional[Databases] = None
+    databases: Optional[Databases] = None,
+    user_feedback: Optional[str] = None,
+    previous_result: Optional[Dict] = None
 ) -> Dict:
     """
     分析错题图片并提取题目信息（异步）
@@ -508,6 +510,8 @@ async def analyze_mistake_image(
         image_base64: 图片 base64 编码（纯 base64 或包含 data:image 前缀）
         user_id: 用户ID（用于获取学段信息）
         databases: Databases 实例（可选）
+        user_feedback: 用户反馈的错误原因（可选）
+        previous_result: 上次识别的结果（可选）
         
     Returns:
         包含学科、题目内容、类型、模块、知识点等的字典
@@ -522,7 +526,13 @@ async def analyze_mistake_image(
         raise ValueError("图片数据无效")
     
     # 分析图片：识别学科 + OCR + 知识点
-    analysis_result = await analyze_with_llm_vision(clean_image_base64, user_id, databases)
+    analysis_result = await analyze_with_llm_vision(
+        clean_image_base64, 
+        user_id, 
+        databases,
+        user_feedback=user_feedback,
+        previous_result=previous_result
+    )
     
     return analysis_result
 
@@ -530,7 +540,9 @@ async def analyze_mistake_image(
 async def analyze_with_llm_vision(
     image_base64: str,
     user_id: str,
-    databases: Optional[Databases] = None
+    databases: Optional[Databases] = None,
+    user_feedback: Optional[str] = None,
+    previous_result: Optional[Dict] = None
 ) -> Dict:
     """
     使用 LLM 两步分析法（内部函数，只接受 base64，异步）
@@ -542,10 +554,16 @@ async def analyze_with_llm_vision(
         image_base64: 纯 base64 字符串（不含前缀）
         user_id: 用户ID（用于获取学段信息）
         databases: Databases 实例（可选）
+        user_feedback: 用户反馈的错误原因（可选）
+        previous_result: 上次识别的结果（可选）
     """
     try:
         # 第一步：OCR 提取题目内容和学科识别
-        step1 = await extract_question_content(image_base64)
+        step1 = await extract_question_content(
+            image_base64,
+            user_feedback=user_feedback,
+            previous_result=previous_result
+        )
         
         # 第二步：基于题目内容和学科识别模块和知识点
         step2 = await analyze_subject_and_knowledge_points(
@@ -573,7 +591,9 @@ async def analyze_with_llm_vision(
 
 
 async def extract_question_content(
-    image_base64: str
+    image_base64: str,
+    user_feedback: Optional[str] = None,
+    previous_result: Optional[Dict] = None
 ) -> Dict:
     """
     第一步：OCR 提取题目内容和学科识别（内部函数，异步）
@@ -582,6 +602,8 @@ async def extract_question_content(
     
     Args:
         image_base64: 纯 base64 字符串（不含前缀）
+        user_feedback: 用户反馈的错误原因（可选）
+        previous_result: 上次识别的结果（可选），包含 content, type, options, subject
         
     Returns:
         {'content': str, 'type': str, 'options': list, 'subject': str}
@@ -595,7 +617,52 @@ async def extract_question_content(
 4. 识别完整公式：分数、根号、积分、求和、矩阵等
 5. 分段标记格式，LaTeX 直接书写，不转义"""
     
-    user_prompt = r"""请识别这张题目图片，提取以下信息：
+    # 构建用户 prompt，如果有用户反馈则加入
+    user_feedback_section = ""
+    if user_feedback and previous_result:
+        # 构建上次识别结果的展示
+        prev_content = previous_result.get('content', '无')
+        prev_type = previous_result.get('type', '无')
+        prev_subject = previous_result.get('subject', '无')
+        prev_options = previous_result.get('options', [])
+        prev_options_text = '\n'.join(prev_options) if prev_options else '无'
+        
+        user_feedback_section = f"""
+
+🚨🚨🚨 **重要：用户反馈（上次识别出现了错误）** 🚨🚨🚨
+
+**上次你识别的结果：**
+- 题目类型：{prev_type}
+- 学科：{prev_subject}
+- 题目内容：
+{prev_content}
+- 选项：
+{prev_options_text}
+
+**用户指出的错误：**
+{user_feedback}
+
+❗❗❗ **请仔细对比上次的识别结果和用户反馈，找出错误在哪里，这次务必修正！** ❗❗❗
+
+---
+
+"""
+    elif user_feedback:
+        # 如果只有反馈没有上次结果
+        user_feedback_section = f"""
+
+🚨🚨🚨 **重要：用户反馈（识别出现了错误）** 🚨🚨🚨
+
+**用户指出的问题：**
+{user_feedback}
+
+❗❗❗ **请务必特别注意上述问题，优先修正这些错误！** ❗❗❗
+
+---
+
+"""
+    
+    user_prompt = rf"""请识别这张题目图片，提取信息。
 
 **要提取的内容：**
 1. **题目内容**：转换为 Markdown + LaTeX 格式
@@ -695,11 +762,11 @@ math
 求矩阵的行列式：
 
 \[
-\begin{bmatrix}
+\begin{{bmatrix}}
 1 & 2 & 3 \\
 4 & 5 & 6 \\
 7 & 8 & 9
-\end{bmatrix}
+\end{{bmatrix}}
 \]
 
 ##OPTIONS##
@@ -707,24 +774,27 @@ math
 ##END##
 
 **LaTeX 常用语法：**
-- 分数：\frac{a}{b}
-- 上标：x^2, x^{n+1}
-- 下标：x_i, a_{ij}
-- 根号：\sqrt{x}, \sqrt[3]{x}
+- 分数：\frac{{a}}{{b}}
+- 上标：x^2, x^{{n+1}}
+- 下标：x_i, a_{{ij}}
+- 根号：\sqrt{{x}}, \sqrt[3]{{x}}
 - 积分：\int_a^b
-- 求和：\sum_{i=1}^n
+- 求和：\sum_{{i=1}}^n
 - 希腊字母：\alpha, \beta, \theta, \pi
 - 运算符：\times, \div, \pm, \leq, \geq
-- 矩阵：\begin{bmatrix} ... \end{bmatrix}
+- 矩阵：\begin{{bmatrix}} ... \end{{bmatrix}}
 
 **重要：**
 - 标记符号必须独占一行
 - 行内公式用 \( ... \)，块级公式用 \[ ... \]
 - LaTeX 公式直接书写，不需要转义反斜杠
-- OPTIONS 部分如果是非选择题，留空即可"""
+- OPTIONS 部分如果是非选择题，留空即可
+
+{user_feedback_section}"""
 
     response = None
     try:
+        print(f"user_prompt: {user_prompt}")
         llm = get_llm_provider()
         response = await llm.chat_with_vision(
             prompt=user_prompt,
