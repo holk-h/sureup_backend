@@ -9,6 +9,7 @@
 """
 import os
 from typing import Dict, Optional
+from datetime import datetime, date
 from appwrite.services.databases import Databases
 from appwrite.id import ID
 from appwrite.query import Query
@@ -17,6 +18,7 @@ from appwrite.query import Query
 DATABASE_ID = os.environ.get('APPWRITE_DATABASE_ID', 'main')
 COLLECTION_USER_KP = 'user_knowledge_points'
 COLLECTION_MODULES = 'knowledge_points_library'  # 改为模块库
+COLLECTION_REVIEW_STATES = 'review_states'
 
 
 def ensure_knowledge_point(
@@ -25,7 +27,8 @@ def ensure_knowledge_point(
     subject: str,
     module_id: str,
     knowledge_point_name: str,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    importance: str = 'normal'
 ) -> Dict:
     """
     确保用户知识点存在
@@ -33,6 +36,8 @@ def ensure_knowledge_point(
     策略：
     1. 先在用户知识点中查找（同一用户、同一模块、同一名称）
     2. 如果不存在，创建新的用户知识点
+    3. 如果已存在但 importance 不同，更新 importance
+    4. 确保有对应的复习状态记录
     
     Args:
         databases: 数据库实例
@@ -41,6 +46,7 @@ def ensure_knowledge_point(
         module_id: 模块ID（来自 knowledge_points_library）
         knowledge_point_name: 知识点名称
         description: 描述（可选）
+        importance: 重要程度 (high/basic/normal)，默认 'normal'
     """
     
     # 1. 查找是否已存在
@@ -52,16 +58,32 @@ def ensure_knowledge_point(
     )
     
     if existing:
+        # 确保已存在的知识点也有复习状态（可能是旧数据）
+        _ensure_review_state(databases, user_id, existing['$id'])
+        
+        # 如果 importance 不同，更新它（因为 LLM 可能重新评估了重要度）
+        existing_importance = existing.get('importance', 'normal')
+        if existing_importance != importance:
+            print(f"更新知识点 '{knowledge_point_name}' 的重要度: {existing_importance} -> {importance}")
+            databases.update_document(
+                database_id=DATABASE_ID,
+                collection_id=COLLECTION_USER_KP,
+                document_id=existing['$id'],
+                data={'importance': importance}
+            )
+            existing['importance'] = importance
+        
         return existing
     
-    # 2. 创建新的用户知识点
+    # 2. 创建新的用户知识点（内部会自动创建复习状态）
     return create_user_knowledge_point(
         databases=databases,
         user_id=user_id,
         subject=subject,
         module_id=module_id,
         name=knowledge_point_name,
-        description=description
+        description=description,
+        importance=importance
     )
 
 
@@ -229,7 +251,8 @@ def create_user_knowledge_point(
     subject: str,
     module_id: str,
     name: str,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    importance: str = 'normal'
 ) -> Dict:
     """
     创建用户知识点
@@ -243,6 +266,7 @@ def create_user_knowledge_point(
         module_id: 模块ID（来自 knowledge_points_library）
         name: 知识点名称
         description: 描述（可选）
+        importance: 重要程度 (high/basic/normal)，默认 'normal'
     """
     kp_data = {
         'userId': user_id,
@@ -250,6 +274,7 @@ def create_user_knowledge_point(
         'moduleId': module_id,
         'name': name,
         'description': description or '',
+        'importance': importance,
         'mistakeCount': 0,
         'masteredCount': 0,
         'lastMistakeAt': None
@@ -261,6 +286,9 @@ def create_user_knowledge_point(
         document_id=ID.unique(),
         data=kp_data
     )
+    
+    # 创建对应的复习状态记录
+    _ensure_review_state(databases, user_id, doc['$id'])
     
     return doc
 
@@ -429,4 +457,71 @@ def get_user_knowledge_points_by_module(
     except Exception as e:
         print(f"获取知识点列表失败: {str(e)}")
         return []
+
+
+def _ensure_review_state(
+    databases: Databases,
+    user_id: str,
+    knowledge_point_id: str
+) -> Optional[Dict]:
+    """
+    确保知识点有对应的复习状态记录
+    
+    如果已存在则返回，不存在则创建新的复习状态记录
+    
+    Args:
+        databases: 数据库实例
+        user_id: 用户ID
+        knowledge_point_id: 知识点ID
+        
+    Returns:
+        复习状态记录文档，失败返回 None
+    """
+    try:
+        # 1. 检查是否已存在
+        existing = databases.list_documents(
+            database_id=DATABASE_ID,
+            collection_id=COLLECTION_REVIEW_STATES,
+            queries=[
+                Query.equal('userId', user_id),
+                Query.equal('knowledgePointId', knowledge_point_id),
+                Query.limit(1)
+            ]
+        )
+        
+        if existing['documents']:
+            print(f"✓ 复习状态已存在: {knowledge_point_id}")
+            return existing['documents'][0]
+        
+        # 2. 创建新的复习状态记录
+        today = date.today().isoformat()
+        
+        review_state_data = {
+            'userId': user_id,
+            'knowledgePointId': knowledge_point_id,
+            'status': 'newLearning',  # 新学习状态
+            'masteryScore': 0,
+            'currentInterval': 1,  # 1天后复习
+            'nextReviewDate': today,  # 今天就可以复习（新错题）
+            'lastReviewDate': None,
+            'totalReviews': 0,
+            'consecutiveCorrect': 0,
+            'totalCorrect': 0,
+            'totalWrong': 0,
+            'isActive': True
+        }
+        
+        doc = databases.create_document(
+            database_id=DATABASE_ID,
+            collection_id=COLLECTION_REVIEW_STATES,
+            document_id=ID.unique(),
+            data=review_state_data
+        )
+        
+        print(f"✓ 创建复习状态: {knowledge_point_id}，下次复习日期: {today}")
+        return doc
+        
+    except Exception as e:
+        print(f"⚠️ 创建复习状态失败: {str(e)}")
+        return None
 

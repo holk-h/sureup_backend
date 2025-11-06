@@ -415,6 +415,109 @@ math
         raise
 
 
+def parse_knowledge_points_response(response: str) -> Dict:
+    """
+    解析分段标记格式的知识点分析响应
+    
+    格式示例：
+    ##MODULES##
+    模块1
+    
+    ##KNOWLEDGE_POINTS##
+    知识点名|模块名|category|importance
+    
+    ##SOLVING_HINT##
+    解题提示
+    
+    ##END##
+    
+    Args:
+        response: LLM 返回的分段标记格式文本
+        
+    Returns:
+        {
+            'modules': list[str],
+            'knowledgePoints': list[dict],
+            'solvingHint': str
+        }
+    """
+    import re
+    
+    # 清理可能的代码块标记
+    response = response.strip()
+    if response.startswith('```'):
+        lines = response.split('\n')
+        if lines[0].startswith('```'):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        response = '\n'.join(lines)
+    
+    sections = {}
+    
+    # 提取 MODULES
+    modules_match = re.search(r'##MODULES##\s*\n(.*?)(?=##KNOWLEDGE_POINTS##|##END##)', response, re.DOTALL | re.IGNORECASE)
+    if modules_match:
+        modules_text = modules_match.group(1).strip()
+        if modules_text:
+            sections['modules'] = [line.strip() for line in modules_text.split('\n') if line.strip()]
+        else:
+            sections['modules'] = []
+    else:
+        sections['modules'] = []
+    
+    # 提取 KNOWLEDGE_POINTS
+    kp_match = re.search(r'##KNOWLEDGE_POINTS##\s*\n(.*?)(?=##SOLVING_HINT##|##END##)', response, re.DOTALL | re.IGNORECASE)
+    if kp_match:
+        kp_text = kp_match.group(1).strip()
+        if kp_text:
+            kp_list = []
+            for line in kp_text.split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split('|')
+                if len(parts) >= 4:
+                    kp_list.append({
+                        'name': parts[0].strip(),
+                        'module': parts[1].strip(),
+                        'category': parts[2].strip(),
+                        'importance': parts[3].strip()
+                    })
+                elif len(parts) >= 2:
+                    kp_list.append({
+                        'name': parts[0].strip(),
+                        'module': parts[1].strip(),
+                        'category': parts[2].strip() if len(parts) > 2 else 'secondary',
+                        'importance': parts[3].strip() if len(parts) > 3 else 'normal'
+                    })
+            sections['knowledgePoints'] = kp_list
+        else:
+            sections['knowledgePoints'] = []
+    else:
+        sections['knowledgePoints'] = []
+    
+    # 提取 SOLVING_HINT
+    hint_match = re.search(r'##SOLVING_HINT##\s*\n(.*?)(?=##END##)', response, re.DOTALL | re.IGNORECASE)
+    if hint_match:
+        sections['solvingHint'] = hint_match.group(1).strip()
+    else:
+        sections['solvingHint'] = ''
+    
+    # 验证必需字段
+    if not sections.get('modules'):
+        sections['modules'] = ['未分类']
+    if not sections.get('knowledgePoints'):
+        sections['knowledgePoints'] = [{
+            'name': '未分类',
+            'module': sections['modules'][0],
+            'category': 'primary',
+            'importance': 'normal'
+        }]
+    
+    return sections
+
+
 def analyze_knowledge_points(
     content: str,
     question_type: str,
@@ -431,7 +534,7 @@ def analyze_knowledge_points(
         databases: Databases 实例（可选）
         
     Returns:
-        {'module': str, 'knowledgePointNames': list}
+        {'module': str, 'knowledgePointNames': list, 'solvingHint': str}
     """
     subject_name = SUBJECT_NAMES.get(subject, subject)
     
@@ -440,33 +543,87 @@ def analyze_knowledge_points(
 注意：
 - 模块是学科的大分类（如"微积分"、"代数"、"电磁学"、"有机化学"等）
 - 知识点是具体的概念和技能（如"导数"、"极限"、"牛顿第二定律"等）
-- 一个题目可能涉及多个知识点"""
+- 一个题目可能涉及多个知识点
+- 解题提示要求（重点！）：
+  - **必须具有通用性**：总结这一类题的通用方法，让学生举一反三
+  - **不要只针对这道题**：要形成方法论，适用于同类问题
+  - **包含关键要素**：思路、公式、步骤、注意事项
+  - 可以使用 LaTeX：行内 \( ... \)，块级 \[ ... \]
+  - 长度：2-3句话"""
     
-    user_prompt = f"""请分析这道 {subject_name} 题目，识别其知识点信息：
+    user_prompt = rf"""请分析这道 {subject_name} 题目，识别其知识点信息：
 
 **题目内容：**
 {content}
 
 **题目类型：** {question_type}
 
-返回 JSON 格式（不要用代码块包裹）：
+**返回格式（分段标记，不要用代码块包裹）：**
 
-{{
-    "module": "模块名称",
-    "knowledgePointNames": ["知识点1", "知识点2", "知识点3"]
-}}
+##MODULES##
+模块名称
 
-**示例（数学）：**
-{{
-    "module": "微积分",
-    "knowledgePointNames": ["定积分", "幂函数积分", "微积分基本定理"]
-}}
+##KNOWLEDGE_POINTS##
+知识点名|模块名|category|importance
+知识点名|模块名|category|importance
+...
 
-**示例（物理）：**
-{{
-    "module": "力学",
-    "knowledgePointNames": ["牛顿第二定律", "受力分析", "加速度计算"]
-}}"""
+##SOLVING_HINT##
+解题提示（可以包含 LaTeX 公式）
+
+##END##
+
+**说明：**
+- category: primary（主要考点）/ secondary（次要考点）/ related（相关考点）
+- importance: high（高频考点）/ basic（基础知识）/ normal（普通考点）
+- 解题提示要求：
+  - **通用性原则**：总结这一类题的通用方法，不只针对当前这道题
+  - **举一反三**：让学生能解决同类问题
+  - **方法论导向**：点出关键思路、公式、步骤
+  - 可以包含公式：行内用 \( ... \)，块级用 \[ ... \]
+  - 长度：2-3句话，既简洁又完整
+
+**示例1（数学 - 强调通用方法）：**
+
+##MODULES##
+微积分
+
+##KNOWLEDGE_POINTS##
+定积分|微积分|primary|high
+幂函数积分|微积分|primary|high
+
+##SOLVING_HINT##
+幂函数定积分问题的标准流程：先用不定积分公式 \( \int x^n \, dx = \frac{{x^{{n+1}}}}{{n+1}} + C \) 求出原函数，再代入上下限相减 \( F(b) - F(a) \)。记住：定积分 = 上限原函数值 - 下限原函数值。
+
+##END##
+
+**示例2（物理 - 强调解题步骤）：**
+
+##MODULES##
+力学
+
+##KNOWLEDGE_POINTS##
+牛顿第二定律|力学|primary|high
+受力分析|力学|secondary|basic
+
+##SOLVING_HINT##
+力学问题解题三步骤：（1）画受力图，明确各力方向和大小；（2）用 \( F = ma \) 求加速度；（3）结合运动学公式求解。这类问题的关键是建立力和运动的桥梁。
+
+##END##
+
+**示例3（数学 - 强调思维路径）：**
+
+##MODULES##
+二次函数
+
+##KNOWLEDGE_POINTS##
+判别式|二次函数|primary|high
+一元二次方程|二次函数|secondary|basic
+
+##SOLVING_HINT##
+遇到判断方程根的情况问题，核心是计算判别式 \( \Delta = b^2 - 4ac \)：\( \Delta > 0 \) 有两个不同实根，\( \Delta = 0 \) 有两个相等实根，\( \Delta < 0 \) 无实根。这是解决一元二次方程根的性质问题的通用方法。
+
+##END##"""
 
     try:
         llm = get_llm_provider()
@@ -474,26 +631,27 @@ def analyze_knowledge_points(
             prompt=user_prompt,
             system_prompt=system_prompt,
             temperature=0.5,
-            max_tokens=1000
+            max_tokens=1500
         )
         
-        # 解析 JSON
-        result = json.loads(clean_json_response(response))
+        print(f"📋 LLM 返回的知识点分析（前300字符）: {response[:300]}...")
         
-        # 验证和规范化
-        if not result.get('module'):
-            result['module'] = '未分类'
+        # 解析分段标记格式
+        parsed = parse_knowledge_points_response(response)
         
-        kp_names = result.get('knowledgePointNames', [])
-        if not isinstance(kp_names, list):
-            kp_names = [str(kp_names)] if kp_names else []
-        result['knowledgePointNames'] = kp_names or ['未分类']
+        # 转换为旧格式（兼容现有代码）
+        result = {
+            'module': parsed['modules'][0] if parsed['modules'] else '未分类',
+            'knowledgePointNames': [kp['name'] for kp in parsed['knowledgePoints']],
+            'solvingHint': parsed.get('solvingHint', '')
+        }
+        
+        print(f"✅ 知识点分析解析成功！模块: {result['module']}")
         
         return result
         
-    except json.JSONDecodeError as e:
-        print(f"JSON 解析失败: {str(e)}, 响应: {response}")
-        raise ValueError(f"知识点分析失败: {str(e)}")
     except Exception as e:
         print(f"知识点分析失败: {str(e)}")
+        if 'response' in locals():
+            print(f"原始响应: {response[:500]}...")
         raise

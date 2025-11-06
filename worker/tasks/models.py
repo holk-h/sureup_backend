@@ -60,3 +60,17 @@ class MistakeAnalyzerTask(BaseModel):
             }
         }
 
+
+class DailyTaskGeneratorTask(BaseModel):
+    """每日任务生成任务数据"""
+    trigger_time: str = Field(..., description="触发时间 (ISO格式)")
+    trigger_type: str = Field(default="manual", description="触发类型 (scheduled|manual)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "trigger_time": "2025-11-05T02:00:00",
+                "trigger_type": "scheduled"
+            }
+        }
+

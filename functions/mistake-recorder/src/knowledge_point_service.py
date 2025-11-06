@@ -9,6 +9,7 @@
 """
 import os
 from typing import Dict, Optional
+from datetime import datetime, date
 from appwrite.services.databases import Databases
 from appwrite.id import ID
 from appwrite.query import Query
@@ -17,6 +18,7 @@ from appwrite.query import Query
 DATABASE_ID = os.environ.get('APPWRITE_DATABASE_ID', 'main')
 COLLECTION_USER_KP = 'user_knowledge_points'
 COLLECTION_MODULES = 'knowledge_points_library'  # 改为模块库
+COLLECTION_REVIEW_STATES = 'review_states'
 
 
 def ensure_knowledge_point(

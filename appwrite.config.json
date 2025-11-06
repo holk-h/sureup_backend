@@ -206,7 +206,7 @@
                 "databases.read",
                 "databases.write"
             ],
-            "schedule": "0 2 * * *",
+            "schedule": "0 18 * * *",
             "timeout": 300,
             "enabled": true,
             "logging": true,
@@ -512,6 +512,15 @@
                     "array": false,
                     "format": "",
                     "default": null
+                },
+                {
+                    "key": "dailyTaskDifficulty",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "normal",
+                    "encrypt": false
                 }
             ],
             "indexes": [
@@ -597,6 +606,15 @@
                     "array": false,
                     "size": 500,
                     "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "importance",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "normal",
                     "encrypt": false
                 },
                 {
@@ -1384,6 +1402,33 @@
                     "size": 1000,
                     "default": null,
                     "encrypt": false
+                },
+                {
+                    "key": "dailyTaskId",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "taskItemId",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "userFeedback",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": null,
+                    "encrypt": false
                 }
             ],
             "indexes": [
@@ -1417,6 +1462,15 @@
                     "columns": [
                         "userId",
                         "type"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "dailyTaskId_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "dailyTaskId"
                     ],
                     "orders": []
                 }
@@ -1803,6 +1857,198 @@
             ]
         },
         {
+            "$id": "review_states",
+            "$permissions": [
+                "read(\"any\")"
+            ],
+            "databaseId": "main",
+            "name": "知识点复习状态",
+            "enabled": true,
+            "rowSecurity": true,
+            "columns": [
+                {
+                    "key": "userId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "knowledgePointId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "status",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "newLearning",
+                    "encrypt": false
+                },
+                {
+                    "key": "masteryScore",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 100,
+                    "default": 0
+                },
+                {
+                    "key": "currentInterval",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 365,
+                    "default": 1
+                },
+                {
+                    "key": "nextReviewDate",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "lastReviewDate",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "totalReviews",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10000,
+                    "default": 0
+                },
+                {
+                    "key": "consecutiveCorrect",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 1000,
+                    "default": 0
+                },
+                {
+                    "key": "totalCorrect",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10000,
+                    "default": 0
+                },
+                {
+                    "key": "totalWrong",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 10000,
+                    "default": 0
+                },
+                {
+                    "key": "isActive",
+                    "type": "boolean",
+                    "required": false,
+                    "array": false,
+                    "default": true
+                }
+            ],
+            "indexes": [
+                {
+                    "key": "userId_knowledgePointId_unique",
+                    "type": "unique",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "knowledgePointId"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "userId_nextReviewDate_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "nextReviewDate"
+                    ],
+                    "orders": [
+                        "ASC",
+                        "ASC"
+                    ]
+                },
+                {
+                    "key": "userId_status_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "status"
+                    ],
+                    "orders": []
+                }
+            ]
+        },
+        {
+            "$id": "learning_memories",
+            "$permissions": [
+                "read(\"any\")"
+            ],
+            "databaseId": "main",
+            "name": "学习记忆",
+            "enabled": true,
+            "rowSecurity": true,
+            "columns": [
+                {
+                    "key": "userId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "weakPoints",
+                    "type": "string",
+                    "required": false,
+                    "array": true,
+                    "size": 500,
+                    "default": null,
+                    "encrypt": false
+                }
+            ],
+            "indexes": [
+                {
+                    "key": "userId_unique",
+                    "type": "unique",
+                    "status": "available",
+                    "columns": [
+                        "userId"
+                    ],
+                    "orders": []
+                }
+            ]
+        },
+        {
             "$id": "daily_tasks",
             "$permissions": [
                 "read(\"any\")"
@@ -1830,22 +2076,31 @@
                     "default": null
                 },
                 {
-                    "key": "questionIds",
+                    "key": "items",
                     "type": "string",
                     "required": true,
-                    "array": true,
-                    "size": 2000,
+                    "array": false,
+                    "size": 10000,
                     "default": null,
                     "encrypt": false
                 },
                 {
-                    "key": "taskType",
-                    "type": "string",
-                    "required": true,
+                    "key": "totalQuestions",
+                    "type": "integer",
+                    "required": false,
                     "array": false,
-                    "size": 30,
-                    "default": null,
-                    "encrypt": false
+                    "min": 0,
+                    "max": 100,
+                    "default": 0
+                },
+                {
+                    "key": "completedCount",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 100,
+                    "default": 0
                 },
                 {
                     "key": "isCompleted",
@@ -1861,15 +2116,6 @@
                     "array": false,
                     "format": "",
                     "default": null
-                },
-                {
-                    "key": "metadata",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 2000,
-                    "default": null,
-                    "encrypt": false
                 }
             ],
             "indexes": [

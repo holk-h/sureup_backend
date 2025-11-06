@@ -83,7 +83,7 @@ def clean_json_response(response: str) -> str:
 
 def parse_segmented_response(response: str) -> Dict:
     """
-    解析分段标记格式的 LLM 响应
+    解析分段标记格式的 LLM 响应（题目内容提取）
     
     格式示例：
     ##TYPE##
@@ -164,6 +164,120 @@ def parse_segmented_response(response: str) -> Dict:
         raise ValueError("缺少 ##SUBJECT## 标记")
     if 'content' not in sections:
         raise ValueError("缺少 ##CONTENT## 标记")
+    
+    return sections
+
+
+def parse_knowledge_points_response(response: str) -> Dict:
+    """
+    解析分段标记格式的知识点分析响应
+    
+    格式示例：
+    ##MODULES##
+    模块1
+    模块2
+    
+    ##KNOWLEDGE_POINTS##
+    知识点名|模块名|category|importance
+    知识点名|模块名|category|importance
+    
+    ##SOLVING_HINT##
+    解题提示（可以包含 LaTeX 公式）
+    
+    ##END##
+    
+    Args:
+        response: LLM 返回的分段标记格式文本
+        
+    Returns:
+        {
+            'modules': list[str],
+            'knowledgePoints': list[dict],
+            'solvingHint': str
+        }
+        
+    Raises:
+        ValueError: 解析失败
+    """
+    import re
+    
+    # 清理可能的代码块标记
+    response = response.strip()
+    if response.startswith('```'):
+        lines = response.split('\n')
+        if lines[0].startswith('```'):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        response = '\n'.join(lines)
+    
+    sections = {}
+    
+    # 提取 MODULES
+    modules_match = re.search(r'##MODULES##\s*\n(.*?)(?=##KNOWLEDGE_POINTS##|##END##)', response, re.DOTALL | re.IGNORECASE)
+    if modules_match:
+        modules_text = modules_match.group(1).strip()
+        if modules_text:
+            sections['modules'] = [
+                line.strip() 
+                for line in modules_text.split('\n') 
+                if line.strip()
+            ]
+        else:
+            sections['modules'] = []
+    else:
+        sections['modules'] = []
+    
+    # 提取 KNOWLEDGE_POINTS
+    kp_match = re.search(r'##KNOWLEDGE_POINTS##\s*\n(.*?)(?=##SOLVING_HINT##|##END##)', response, re.DOTALL | re.IGNORECASE)
+    if kp_match:
+        kp_text = kp_match.group(1).strip()
+        if kp_text:
+            kp_list = []
+            for line in kp_text.split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                # 解析格式：知识点名|模块名|category|importance
+                parts = line.split('|')
+                if len(parts) >= 4:
+                    kp_list.append({
+                        'name': parts[0].strip(),
+                        'module': parts[1].strip(),
+                        'category': parts[2].strip(),
+                        'importance': parts[3].strip()
+                    })
+                elif len(parts) >= 2:
+                    # 容错：如果只有部分字段，使用默认值
+                    kp_list.append({
+                        'name': parts[0].strip(),
+                        'module': parts[1].strip(),
+                        'category': parts[2].strip() if len(parts) > 2 else 'secondary',
+                        'importance': parts[3].strip() if len(parts) > 3 else 'normal'
+                    })
+            sections['knowledgePoints'] = kp_list
+        else:
+            sections['knowledgePoints'] = []
+    else:
+        sections['knowledgePoints'] = []
+    
+    # 提取 SOLVING_HINT
+    hint_match = re.search(r'##SOLVING_HINT##\s*\n(.*?)(?=##END##)', response, re.DOTALL | re.IGNORECASE)
+    if hint_match:
+        sections['solvingHint'] = hint_match.group(1).strip()
+    else:
+        sections['solvingHint'] = ''
+    
+    # 验证必需字段
+    if not sections.get('modules'):
+        sections['modules'] = ['未分类']
+    if not sections.get('knowledgePoints'):
+        sections['knowledgePoints'] = [{
+            'name': '未分类',
+            'module': sections['modules'][0],
+            'category': 'primary',
+            'importance': 'normal'
+        }]
     
     return sections
 
@@ -472,14 +586,14 @@ async def extract_question_content(
     Returns:
         {'content': str, 'type': str, 'options': list, 'subject': str}
     """
-    system_prompt = """你是专业的题目 OCR 识别专家，擅长从图片中准确提取题目文字并识别学科。
+    system_prompt = """你是专业的题目 OCR 识别专家，精确提取题目文字并识别学科。
 
 **核心要求：**
-1. 所有数学、物理、化学公式必须使用 LaTeX 格式
-2. 行内公式用 \( ... \) 包裹
-3. 独立公式用 \[ ... \] 包裹，并独立成行
-4. 识别完整的公式结构，包括分数、根号、积分、求和等
-5. 使用分段标记格式返回，LaTeX 公式直接书写，不需要任何转义"""
+1. **准确提取**：逐字逐句识别，不遗漏不添加，忽略手写痕迹
+2. **公式精确**：数学、物理、化学公式必须用 LaTeX，保持原题结构
+3. 行内公式：\( ... \)，独立公式：\[ ... \]（独立成行）
+4. 识别完整公式：分数、根号、积分、求和、矩阵等
+5. 分段标记格式，LaTeX 直接书写，不转义"""
     
     user_prompt = r"""请识别这张题目图片，提取以下信息：
 
@@ -616,10 +730,10 @@ math
             prompt=user_prompt,
             image_base64=image_base64,
             system_prompt=system_prompt,
-            temperature=0.3,
-            max_tokens=3000,
-            thinking_enabled=True,      # 启用思考模式
-            reasoning_effort="low"      # 设置推理深度为 low
+            temperature=1,
+            max_tokens=32768,
+            thinking={"type": "enabled"},  # 启用思考模式
+            reasoning_effort="low"          # 设置推理深度为 low
         )
         
         print(f"📋 LLM 返回的分段格式（前300字符）: {response[:300]}...")
@@ -761,9 +875,10 @@ async def analyze_subject_and_knowledge_points(
     
     根据用户学段提供相应的模块列表和知识点列表给 LLM
     
-    新增功能（v3.0）：
-    - 计算知识点权重（主要考点 vs 次要考点）
-    - 判断知识点重要度（high/basic/normal）
+    核心功能：
+    - 识别模块和知识点
+    - 判断知识点的角色（category: primary/secondary/related - 在这道题中的作用）
+    - 判断知识点的重要性（importance: high/basic/normal - 知识点自身的重要程度）
     - 生成解题提示
     
     Args:
@@ -782,12 +897,11 @@ async def analyze_subject_and_knowledge_points(
                 'name': str, 
                 'module': str, 
                 'moduleId': str,
-                'weight': float,       # 新增：知识点权重 0.2-1.0
-                'importance': str      # 新增：重要度 high/basic/normal
+                'category': str,      # 在题目中的角色: primary/secondary/related
+                'importance': str     # 知识点自身重要度: high/basic/normal
             }],
-            'primaryKnowledgePointId': str,           # 新增：主要考点ID
-            'knowledgePointWeights': dict,            # 新增：{kpId: weight}
-            'solvingHint': str                        # 新增：解题提示
+            'primaryKnowledgePoints': list[dict],  # 主要考点列表（category=primary的）
+            'solvingHint': str                     # 解题提示
         }
     """
     # 获取该学科在用户学段的模块列表
@@ -807,24 +921,36 @@ async def analyze_subject_and_knowledge_points(
                 modules_list.append(f"  - {mod['name']}")
         modules_text = "\n".join(modules_list)
     
-    system_prompt = """你是学科知识点分析专家。根据题目内容识别模块和知识点。
+    system_prompt = """你是学科知识点分析专家，专注于精确识别题目的考点。
 
-要求：
-- 必须从提供的模块列表中选择，不能创造新模块
-- 知识点使用简洁的标准术语
-- 区分主要考点和次要考点
-- 判断知识点的重要程度
-- 生成简洁的解题提示
+核心原则：
+- 必须从提供的模块列表中选择
+- **知识点要精确**：使用标准学术术语，避免模糊表达
+- 区分题目角色（category）和知识点重要性（importance）
 
-分析指导：
-1. 模块选择：找最相关的模块，优先选择题目主要考查的内容所在模块
-2. 知识点提取：识别一个或多个核心知识点，避免过度细分或过度概括
-3. 权重判断：主要考点weight=1.0，次要考点weight=0.3-0.5，相关但不重要的weight=0.2
-4. 重要度判断：
-   - high：高频考点（考试常考的核心知识）
-   - basic：基础知识点（前置必会的内容）
+分析要点：
+1. **模块选择**：选择题目主要考查内容所在的模块（通常1个，综合题可能2个）
+2. **知识点提取**（关键！）：
+   - 必须精确、具体，如"一元二次方程判别式"而非"方程"
+   - 避免过度概括（太宽泛）或过度细分（太琐碎）
+   - 通常1-3个知识点，主要考点1-2个
+3. **category（题目角色）**：
+   - primary：这道题的主要考点，直接考查的核心内容
+   - secondary：次要考点，间接涉及的内容
+   - related：相关但不直接考查的内容
+4. **importance（知识点重要性）**：
+   - high：考试高频考点，核心重点知识
+   - basic：基础必会内容，其他知识的前置
    - normal：普通考点
-5. 解题提示：总结关键解题思路，如"看到XX条件，优先想XX方法"""
+5. **解题提示**（核心！）：
+   - 分两部分：【本题解法】+【方法论】
+   - **本题解法**：说明这道具体题目的解题思路和关键步骤
+     * **重要**：专注于思路解析，避免具体数值计算过程
+     * 说明"应该怎么做"，而不是"算出等于多少"
+     * 可以指出关键公式和计算方向，但不需要算出具体数值结果
+   - **方法论**：总结这类题和知识点的通用方法、重点、易错点、注意事项
+   - 可使用 LaTeX 公式表达思路
+   - 目标：让学生既能理解当前题目的解题思路，又能掌握同类题型的通用方法"""
     
     available_modules_hint = ""
     if modules_text:
@@ -839,95 +965,288 @@ async def analyze_subject_and_knowledge_points(
     from workers.mistake_analyzer.utils import get_subject_chinese_name
     subject_chinese = get_subject_chinese_name(subject)
     
-    user_prompt = f"""分析这道{subject_chinese}题目的模块、知识点分类和解题提示：
+    user_prompt = rf"""分析这道{subject_chinese}题目，提取模块、知识点和解题提示。
 
 **题目：**
 {content}
 {available_modules_hint}
 
-返回 JSON（不要代码块）：
-{{
-    "modules": ["模块名称"],
-    "knowledgePoints": [
-        {{
-            "name": "知识点名", 
-            "module": "模块名称",
-            "category": "primary",
-            "importance": "high"
-        }}
-    ],
-    "solvingHint": "解题提示"
-}}
+**返回格式（分段标记，不要用代码块）：**
+
+##MODULES##
+模块1
+模块2
+...
+
+##KNOWLEDGE_POINTS##
+知识点名|模块名|category|importance
+知识点名|模块名|category|importance
+...
+
+##SOLVING_HINT##
+解题提示（markdown 格式，可包含 LaTeX）
+
+##END##
 
 **字段说明：**
-- modules: 模块名称列表
-  - **重要**：只填写模块的名称，不要包含括号及括号内的描述
-  - **重要**：例如上面列表中的"二次函数 (二次函数的图像与性质)"，你只需要填写"二次函数"
-  - **重要**：必须从"可用模块列表"中选择（括号前的模块名）
-- category: 知识点分类
-  - primary：主要考点（题目核心考查的，1-2个）
-  - secondary：次要考点（题目涉及但不是重点）
-  - related：相关考点（背景知识，不重要）
-- importance: 知识点重要度
-  - high：高频考点（考试常考）
-  - basic：基础知识点（前置必会）
-  - normal：普通考点
-- solvingHint: 解题提示（一句话，让学生看到就知道怎么做）
-  - 要求：简洁、直接、实用，点出关键思路或方法
-  - 不要说"看到XX优先想XX"这种套话，直接说怎么做
-  - 例如："判别式大于0时有两个不同实根"、"对称轴公式是x=-b/2a"、"先受力分析再列牛顿第二定律方程"
+1. **MODULES**：只填模块名（不含括号描述），必须从上面列表中选择
+2. **KNOWLEDGE_POINTS**：每行一个，格式为 `知识点名|模块名|category|importance`
+   - **知识点名**：精确、具体，如"一元二次方程判别式"而非"方程"
+   - **category**（题目中的角色）：primary（主要考点）/ secondary（次要）/ related（相关）
+   - **importance**（知识点重要性）：high（高频考点）/ basic（基础）/ normal（普通）
+3. **SOLVING_HINT**：分【本题解法】和【方法论】两部分
+   - 专注于解题思路，避免具体数值计算
+   - 解法部分说明"如何分析、如何应用公式、解题步骤"，而不是"计算出等于多少"
+   - 可以写出关键公式和变换思路，但不需要算出具体数值结果
+   - 方法论部分说明这类题和知识点的通用方法、重点、易错点、注意事项
 
-**注意：**
-- 大多数题目只涉及1个模块，跨模块综合题较少（不是没有，需要自行判断）
-- 每个知识点必须归属一个模块
-- 主要考点（category=primary）通常只有1-2个
-- **返回时**：modules 和 knowledgePoints 中的 module 字段只填写模块名称（括号前的部分），不要包含括号和描述
+**示例1（一元二次方程判别式）：**
 
-**示例1（单模块，单主要考点）：**
-{{
-    "modules": ["二次函数"],
-    "knowledgePoints": [
-        {{
-            "name": "判别式",
-            "module": "二次函数",
-            "category": "primary",
-            "importance": "high"
-        }},
-        {{
-            "name": "一元二次方程",
-            "module": "二次函数",
-            "category": "secondary",
-            "importance": "basic"
-        }}
-    ],
-    "solvingHint": "判别式Δ=b²-4ac，Δ>0有两个不同实根，Δ=0有两个相等实根，Δ<0无实根"
-}}
+##MODULES##
+二次函数
 
-**示例2（跨模块，多主要考点）：**
-{{
-    "modules": ["力学", "运动学"],
-    "knowledgePoints": [
-        {{
-            "name": "牛顿第二定律",
-            "module": "力学",
-            "category": "primary",
-            "importance": "high"
-        }},
-        {{
-            "name": "匀变速直线运动",
-            "module": "运动学",
-            "category": "primary",
-            "importance": "high"
-        }},
-        {{
-            "name": "受力分析",
-            "module": "力学",
-            "category": "secondary",
-            "importance": "basic"
-        }}
-    ],
-    "solvingHint": "先画出受力图进行受力分析，然后根据F=ma列方程，结合运动学公式求解"
-}}"""
+##KNOWLEDGE_POINTS##
+一元二次方程判别式|二次函数|primary|high
+
+##SOLVING_HINT##
+**【本题解法】**
+
+这道题考查方程根的性质，关键思路如下：
+
+1. **识别条件**：\( m \)、\( n \) 是方程 \( x^2 + 2020x + 7 = 0 \) 的两个根
+2. **应用韦达定理**：得到 \( m + n = -2020 \)，\( mn = 7 \)
+3. **代数变换**：利用韦达定理的结论，将目标式中的 \( m^2 + 2019m + 6 \) 改写为：
+   - 注意到 \( m^2 + 2019m + 6 = m^2 + 2020m + 7 - m - 1 \)
+   - 而 \( m^2 + 2020m + 7 = 0 \)（因为 \( m \) 是方程的根）
+   - 所以 \( m^2 + 2019m + 6 = mn - m - 1 \)
+4. **对称处理**：同理处理另一个因式
+5. **整体代换**：将两个因式相乘化简即可
+
+**思路核心**：利用"方程的根满足方程"这一性质，结合韦达定理进行整体代换。
+
+---
+
+**【方法论】**
+
+判别式 \( \Delta = b^2 - 4ac \) 是判断一元二次方程根的情况的核心工具：
+- \( \Delta > 0 \)：两个不等实根
+- \( \Delta = 0 \)：两个相等实根  
+- \( \Delta < 0 \)：无实根
+
+**韦达定理**是处理根的关系式的重要工具：
+- 两根之和：\( x_1 + x_2 = -\frac{{b}}{{a}} \)
+- 两根之积：\( x_1 x_2 = \frac{{c}}{{a}} \)
+
+**解题技巧**：遇到包含方程根的复杂代数式时，优先考虑代入韦达定理进行整体代换，避免直接求根导致计算复杂。
+
+##END##
+
+**示例2（物理综合题）：**
+
+##MODULES##
+力学
+运动学
+
+##KNOWLEDGE_POINTS##
+牛顿第二定律|力学|primary|high
+匀变速直线运动公式|运动学|primary|high
+受力分析|力学|secondary|basic
+
+##SOLVING_HINT##
+**【本题解法】**
+
+这道题是力学与运动学的综合问题，解题步骤：
+
+1. **受力分析**：画出受力示意图，明确各力的大小和方向
+2. **求加速度**：根据牛顿第二定律 \( F_{{合}} = ma \) 求出加速度
+3. **求运动量**：根据题目要求选择合适的运动学公式求解
+
+常用运动学公式：
+- 速度公式：\( v = v_0 + at \)
+- 位移公式：\( s = v_0 t + \frac{{1}}{{2}}at^2 \)
+- 速度-位移关系：\( v^2 - v_0^2 = 2as \)
+
+---
+
+**【方法论】**
+
+力学与运动学结合题的通用思路是 **"力→加速度→运动"** 三步法。
+
+**核心要点**：加速度是连接力和运动的桥梁，必须先通过受力分析和牛顿第二定律求出加速度，再用运动学公式。
+
+**常见易错点**：
+1. 受力分析不全或方向错误
+2. 忘记将合力分解到运动方向
+3. 混淆运动学公式的适用条件（只适用于匀变速运动）
+
+**注意事项**：
+- 区分静摩擦力（平衡力）和滑动摩擦力（阻力）
+- 使用正交分解法处理多个力的合成
+
+##END##
+
+**示例3（函数图像与性质）：**
+
+##MODULES##
+函数
+
+##KNOWLEDGE_POINTS##
+函数单调性|函数|primary|high
+函数图像变换|函数|secondary|normal
+
+##SOLVING_HINT##
+**【本题解法】**
+
+这道题考查函数图像的平移和对称变换。
+
+**解题步骤**：
+1. 识别基础函数 \( y = f(x) \) 的图像特征
+2. 应用变换规律：
+   - \( y = f(x - a) \)：向右平移 \( a \) 个单位（注意是 \( x - a \) 而非 \( x + a \)）
+   - \( y = f(-x) \)：关于 y 轴对称
+
+**重要提示**：多个变换时要注意先后顺序，通常先处理括号内的 x 变换，再处理外部的 y 变换。
+
+---
+
+**【方法论】**
+
+函数图像变换的核心是掌握各类基本变换规律。
+
+**平移变换**："左加右减，上加下减"
+- \( y = f(x - a) \)：向右平移 \( a \) 单位
+- \( y = f(x + a) \)：向左平移 \( a \) 单位
+- \( y = f(x) + b \)：向上平移 \( b \) 单位
+
+**对称变换**：
+- \( y = f(-x) \)：关于 y 轴对称
+- \( y = -f(x) \)：关于 x 轴对称
+- \( y = f(|x|) \)：保留右半部分并对称到左边
+
+**伸缩变换**：
+- \( y = af(x) \)：纵向伸缩（\( a > 1 \) 拉伸，\( 0 < a < 1 \) 压缩）
+- \( y = f(ax) \)：横向伸缩（\( a > 1 \) 压缩，\( 0 < a < 1 \) 拉伸）
+
+**解题关键**：找准"关键点"（如极值点、零点、拐点），通过变换规律跟踪这些点的位置变化，从而确定新图像。
+
+##END##
+
+**示例4（化学实验题）：**
+
+##MODULES##
+化学实验
+氧化还原反应
+
+##KNOWLEDGE_POINTS##
+氧化还原反应配平|氧化还原反应|primary|high
+实验安全与操作|化学实验|secondary|basic
+
+##SOLVING_HINT##
+**【本题解法】**
+
+这道题要求配平氧化还原反应方程式，步骤如下：
+
+1. **标化合价**：标出各元素的化合价，找出化合价升降的元素
+2. **确定角色**：
+   - 氧化剂：化合价降低（得电子）
+   - 还原剂：化合价升高（失电子）
+3. **配平系数**：用化合价升降法，计算电子转移总数，使得 **升失 = 降得**
+4. **配平其他物质**：用观察法配平剩余物质
+5. **检查守恒**：检查原子守恒和电荷守恒
+
+**注意**：本题中要注意介质（酸性或碱性），会影响产物的形式。
+
+---
+
+**【方法论】**
+
+氧化还原反应配平的关键是 **"化合价升降法"** 和 **"电子守恒"**。
+
+**标准步骤**：
+1. 标化合价，找变价元素
+2. 列出升降电子数
+3. 用最小公倍数使 **升失 = 降得**
+4. 配平化合价变化的物质系数
+5. 用观察法配平其他物质
+6. 检查原子守恒
+
+**常见易错点**：
+1. 忘记考虑一个分子中有多个相同元素原子时，电子转移数要乘以原子个数
+2. 酸性条件下产物是水，碱性条件下是 OH⁻
+3. 部分反应中，同一物质既是氧化剂又是还原剂（歧化反应）
+
+**记忆口诀**：升失氧、降得还，氧化剂被还原。
+
+##END##
+
+**示例5（数列求和）：**
+
+##MODULES##
+数列
+
+##KNOWLEDGE_POINTS##
+错位相减法|数列|primary|high
+等比数列求和|数列|secondary|high
+
+##SOLVING_HINT##
+**【本题解法】**
+
+这道题是等差数列与等比数列乘积形式的求和，即：
+
+\[
+S_n = \sum_{{k=1}}^{{n}} a_k \cdot b_k
+\]
+
+其中 \( \{{a_k\}} \) 是等差数列，\( \{{b_k\}} \) 是等比数列。
+
+**错位相减法步骤**：
+
+1. 写出和式：
+\[
+S_n = a_1b_1 + a_2b_2 + \cdots + a_nb_n
+\]
+
+2. 两边同乘公比 \( q \)：
+\[
+qS_n = a_1b_2 + a_2b_3 + \cdots + a_nb_{{n+1}}
+\]
+
+3. 两式相减：
+\[
+S_n - qS_n = (1-q)S_n
+\]
+
+4. 右边会变成等比数列求和的形式，即可求出 \( S_n \)
+
+**注意**：最后一项要单独处理。
+
+---
+
+**【方法论】**
+
+数列求和根据数列特征选择方法。
+
+**基本公式**：
+- **等差数列**：\( S_n = \frac{{n(a_1+a_n)}}{{2}} \) 或 \( S_n = na_1 + \frac{{n(n-1)}}{{2}}d \)
+- **等比数列**：\( S_n = \frac{{a_1(1-q^n)}}{{1-q}} \)（\( q \neq 1 \)）
+
+**特殊数列求和技巧**：
+
+1. **错位相减法**：用于"等差 × 等比"型
+   - 适用：\( \sum a_n \cdot b_n \)（\( \{{a_n\}} \) 等差，\( \{{b_n\}} \) 等比）
+
+2. **裂项相消法**：用于可裂项的分式
+   - 例如：\( \frac{{1}}{{n(n+1)}} = \frac{{1}}{{n}} - \frac{{1}}{{n+1}} \)
+
+3. **分组求和法**：将数列拆分成几个可求和的数列
+   - 适用：数列可以分解为几个已知求和公式的数列
+
+4. **倒序相加法**：\( S_n \) 正着写一遍，倒着写一遍，相加后简化
+   - 适用：数列具有对称性质
+
+**解题关键**：识别数列的通项公式特征，选择合适的方法。
+
+##END##"""
 
     response = None
     try:
@@ -935,21 +1254,18 @@ async def analyze_subject_and_knowledge_points(
         response = await llm.chat(
             prompt=user_prompt,
             system_prompt=system_prompt,
-            temperature=0.,
-            max_tokens=4000,
-            thinking_enabled=True,
-            reasoning_effort="medium"
+            temperature=1,
+            max_tokens=32768,
+            thinking={"type": "enabled"},  # 启用思考模式
+            reasoning_effort="medium"       # 设置推理深度为 medium
         )
         
-        # 清理响应
-        cleaned_response = clean_json_response(response)
+        print(f"📋 LLM 返回的知识点分析（前300字符）: {response[:300]}...")
         
-        print(f"📋 LLM 返回的学科分析 JSON: {cleaned_response}...")
+        # 解析分段标记格式
+        result = parse_knowledge_points_response(response)
         
-        # 使用安全的 JSON 解析（带多重容错机制）
-        result = safe_json_loads(cleaned_response, "学科和知识点分析")
-        
-        print(f"✅ 知识点分析 JSON 解析成功！")
+        print(f"✅ 知识点分析解析成功！")
         
         # ===== 第一步：设置学科（从参数获取） =====
         result['subject'] = subject
@@ -1056,11 +1372,11 @@ async def analyze_subject_and_knowledge_points(
                 existing_kp_names = get_existing_knowledge_points_by_module(module_id, user_id, databases)
                 
                 if kp_name in existing_kp_names:
-                    print(f"  ✓ 知识点匹配: {kp_name} ({kp_module}) [{kp_category}] importance={kp_importance}")
+                    print(f"  ✓ 知识点: {kp_name} ({kp_module}) | 题目角色={kp_category} | 重要性={kp_importance}")
                 else:
-                    print(f"  + 新知识点: {kp_name} ({kp_module}) [{kp_category}] importance={kp_importance}")
+                    print(f"  + 新知识点: {kp_name} ({kp_module}) | 题目角色={kp_category} | 重要性={kp_importance}")
             
-            # 记录主要考点（category=primary的）
+            # 记录主要考点（category=primary 表示这道题的主要考点）
             if kp_category == 'primary':
                 primary_kps.append({
                     'name': kp_name,
@@ -1082,10 +1398,12 @@ async def analyze_subject_and_knowledge_points(
         solving_hint = result.get('solvingHint', '')
         if not solving_hint or not isinstance(solving_hint, str):
             solving_hint = ''
-        solving_hint = solving_hint.strip()[:200]  # 限制长度
+        solving_hint = solving_hint.strip()  # 不限制长度，让 LLM 详细说明
         
         print(f"📝 解题提示: {solving_hint[:50]}..." if solving_hint else "⚠ 未提供解题提示")
-        print(f"🎯 主要考点数量: {len(primary_kps)}")
+        print(f"🎯 主要考点（category=primary）: {len(primary_kps)} 个")
+        for kp in primary_kps:
+            print(f"   - {kp['name']} (重要性: {kp['importance']})")
         
         # 返回处理后的结果
         return {
@@ -1093,7 +1411,7 @@ async def analyze_subject_and_knowledge_points(
             'modules': validated_modules,
             'moduleIds': list(validated_module_ids.values()),
             'knowledgePoints': processed_kps,
-            'primaryKnowledgePoints': primary_kps,  # 主要考点列表（weight=1.0的）
+            'primaryKnowledgePoints': primary_kps,  # 主要考点列表（category=primary的）
             'solvingHint': solving_hint  # 解题提示
         }
         

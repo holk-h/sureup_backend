@@ -1,3 +1,2 @@
-appwrite
-python-dotenv
-
+--index-url https://mirrors.aliyun.com/pypi/simple/
+requests

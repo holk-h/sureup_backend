@@ -210,7 +210,8 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
                 subject=subject,
                 module_id=kp_module_id,
                 knowledge_point_name=kp_name,
-                description=None
+                description=None,
+                importance=kp_importance
             )
             kp_id = kp_doc['$id']
             knowledge_point_ids.append(kp_id)

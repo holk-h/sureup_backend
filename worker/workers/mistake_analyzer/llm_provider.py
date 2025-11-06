@@ -13,9 +13,10 @@
         image_url="https://example.com/image.jpg"
     )
     
-    # 启用思考模式
+    # 启用思考模式（深度分析）
     response = await provider.chat(
         prompt="分析这道题",
+        thinking={"type": "enabled"},
         reasoning_effort="high"
     )
 
@@ -29,7 +30,6 @@
     VOLC_TEMPERATURE=0.7                     # 温度（默认 0.7）
     VOLC_TOP_P=0.9                           # Top-P 采样（默认 0.9）
     VOLC_MAX_TOKENS=4096                     # 最大生成 token 数（默认 4096）
-    VOLC_THINKING_ENABLED=false              # 是否启用思考模式（默认 false）
 
 API 文档:
     - 推理服务: https://www.volcengine.com/docs/82379/1449737
@@ -57,7 +57,7 @@ class VolcengineLLMProvider:
     基于火山引擎官方 ARK SDK 实现，支持：
     - 文本对话
     - 多模态（视觉）分析
-    - 思考模式（通过 reasoning_effort 参数）
+    - 深度思考模式（通过 thinking + reasoning_effort 参数）
     - 流式输出（可选）
     """
     
@@ -105,14 +105,12 @@ class VolcengineLLMProvider:
         self.default_temperature = kwargs.get('temperature', 0.7)
         self.default_top_p = kwargs.get('top_p', 0.9)
         self.default_max_tokens = kwargs.get('max_tokens', 4096)
-        self.default_thinking_enabled = kwargs.get('thinking_enabled', False)
         self.default_stream = kwargs.get('stream', False)
         
         # 额外参数
         self.extra_params = {k: v for k, v in kwargs.items() 
                             if k not in ['temperature', 'top_p', 'max_tokens', 
-                                        'thinking_enabled', 'stream', 'timeout', 
-                                        'max_retries', 'retry_delay']}
+                                        'stream', 'timeout', 'max_retries', 'retry_delay']}
     
     async def chat(
         self,
@@ -121,7 +119,7 @@ class VolcengineLLMProvider:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        thinking_enabled: Optional[bool] = None,
+        thinking: Optional[Dict[str, str]] = None,
         reasoning_effort: Optional[str] = None,
         stream: bool = False,
         **kwargs
@@ -135,13 +133,24 @@ class VolcengineLLMProvider:
             temperature: 温度参数（0-1），控制随机性
             top_p: Top-P 采样参数（0-1）
             max_tokens: 最大生成 token 数
-            thinking_enabled: 是否启用思考模式（会输出推理过程）
-            reasoning_effort: 推理深度（"low", "medium", "high"），优先级高于 thinking_enabled
+            thinking: 思考模式配置，例如 {"type": "enabled"} 或 {"type": "disabled"}
+                     - "enabled": 启用深度思考
+                     - "disabled": 禁用深度思考
+                     - "auto": 模型自行判断
+            reasoning_effort: 推理深度（"minimal", "low", "medium", "high"）
+                     - "minimal": 关闭思考，直接回答
+                     - "low": 轻量思考，侧重快速响应
+                     - "medium": 均衡模式，兼顾速度与深度
+                     - "high": 深度分析，处理复杂问题
             stream: 是否使用流式输出
             **kwargs: 其他模型参数
             
         Returns:
             LLM 的响应文本
+            
+        注意：
+            - thinking["type"]="enabled" 时才能使用 reasoning_effort="low/medium/high"
+            - thinking["type"]="disabled" 时，reasoning_effort 只能为 "minimal"
         """
         
         if self.client and Ark:
@@ -152,7 +161,7 @@ class VolcengineLLMProvider:
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
-                thinking_enabled=thinking_enabled,
+                thinking=thinking,
                 reasoning_effort=reasoning_effort,
                 stream=stream,
                 **kwargs
@@ -165,7 +174,7 @@ class VolcengineLLMProvider:
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
-                thinking_enabled=thinking_enabled,
+                thinking=thinking,
                 reasoning_effort=reasoning_effort,
                 stream=stream,
                 **kwargs
@@ -178,7 +187,7 @@ class VolcengineLLMProvider:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        thinking_enabled: Optional[bool] = None,
+        thinking: Optional[Dict[str, str]] = None,
         reasoning_effort: Optional[str] = None,
         stream: bool = False,
         **kwargs
@@ -203,12 +212,11 @@ class VolcengineLLMProvider:
             }
             
             # 添加思考模式参数
+            if thinking is not None:
+                params["thinking"] = thinking
+            
             if reasoning_effort is not None:
                 params["reasoning_effort"] = reasoning_effort
-            elif thinking_enabled is not None:
-                params["reasoning_effort"] = "high" if thinking_enabled else "medium"
-            elif self.default_thinking_enabled:
-                params["reasoning_effort"] = "high"
             
             # 添加其他参数
             params.update(kwargs)
@@ -243,7 +251,7 @@ class VolcengineLLMProvider:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        thinking_enabled: Optional[bool] = None,
+        thinking: Optional[Dict[str, str]] = None,
         reasoning_effort: Optional[str] = None,
         stream: bool = False,
         **kwargs
@@ -261,8 +269,8 @@ class VolcengineLLMProvider:
             temperature: 温度参数
             top_p: Top-P 采样参数
             max_tokens: 最大生成 token 数
-            thinking_enabled: 是否启用思考模式
-            reasoning_effort: 推理深度（"low", "medium", "high"），优先级高于 thinking_enabled
+            thinking: 思考模式配置，例如 {"type": "enabled"}
+            reasoning_effort: 推理深度（"minimal", "low", "medium", "high"）
             stream: 是否使用流式输出
             **kwargs: 其他模型参数
             
@@ -283,7 +291,7 @@ class VolcengineLLMProvider:
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
-                thinking_enabled=thinking_enabled,
+                thinking=thinking,
                 reasoning_effort=reasoning_effort,
                 stream=stream,
                 **kwargs
@@ -298,7 +306,7 @@ class VolcengineLLMProvider:
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
-                thinking_enabled=thinking_enabled,
+                thinking=thinking,
                 reasoning_effort=reasoning_effort,
                 stream=stream,
                 **kwargs
@@ -313,7 +321,7 @@ class VolcengineLLMProvider:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        thinking_enabled: Optional[bool] = None,
+        thinking: Optional[Dict[str, str]] = None,
         reasoning_effort: Optional[str] = None,
         stream: bool = False,
         **kwargs
@@ -357,12 +365,11 @@ class VolcengineLLMProvider:
             }
             
             # 添加思考模式参数
+            if thinking is not None:
+                params["thinking"] = thinking
+            
             if reasoning_effort is not None:
                 params["reasoning_effort"] = reasoning_effort
-            elif thinking_enabled is not None:
-                params["reasoning_effort"] = "high" if thinking_enabled else "medium"
-            elif self.default_thinking_enabled:
-                params["reasoning_effort"] = "high"
             
             # 添加其他参数
             params.update(kwargs)
@@ -397,7 +404,7 @@ class VolcengineLLMProvider:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        thinking_enabled: Optional[bool] = None,
+        thinking: Optional[Dict[str, str]] = None,
         reasoning_effort: Optional[str] = None,
         stream: bool = False,
         **kwargs
@@ -428,12 +435,11 @@ class VolcengineLLMProvider:
             }
             
             # 添加思考模式参数
+            if thinking is not None:
+                payload["thinking"] = thinking
+            
             if reasoning_effort is not None:
                 payload["reasoning_effort"] = reasoning_effort
-            elif thinking_enabled is not None:
-                payload["reasoning_effort"] = "high" if thinking_enabled else "medium"
-            elif self.default_thinking_enabled:
-                payload["reasoning_effort"] = "high"
             
             payload.update(kwargs)
             payload.update(self.extra_params)
@@ -467,7 +473,7 @@ class VolcengineLLMProvider:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        thinking_enabled: Optional[bool] = None,
+        thinking: Optional[Dict[str, str]] = None,
         reasoning_effort: Optional[str] = None,
         stream: bool = False,
         **kwargs
@@ -513,12 +519,12 @@ class VolcengineLLMProvider:
                 "stream": stream,
             }
             
+            # 添加思考模式参数
+            if thinking is not None:
+                payload["thinking"] = thinking
+            
             if reasoning_effort is not None:
                 payload["reasoning_effort"] = reasoning_effort
-            elif thinking_enabled is not None:
-                payload["reasoning_effort"] = "high" if thinking_enabled else "medium"
-            elif self.default_thinking_enabled:
-                payload["reasoning_effort"] = "high"
             
             payload.update(kwargs)
             payload.update(self.extra_params)
@@ -608,7 +614,6 @@ def get_llm_provider(**kwargs) -> VolcengineLLMProvider:
     temperature = kwargs.get('temperature') or float(os.environ.get('VOLC_TEMPERATURE', '0.7'))
     top_p = kwargs.get('top_p') or float(os.environ.get('VOLC_TOP_P', '0.9'))
     max_tokens = kwargs.get('max_tokens') or int(os.environ.get('VOLC_MAX_TOKENS', '4096'))
-    thinking_enabled = kwargs.get('thinking_enabled') or os.environ.get('VOLC_THINKING_ENABLED', 'false').lower() == 'true'
     stream = kwargs.get('stream') or os.environ.get('VOLC_STREAM', 'false').lower() == 'true'
     
     return VolcengineLLMProvider(
@@ -621,12 +626,11 @@ def get_llm_provider(**kwargs) -> VolcengineLLMProvider:
         temperature=temperature,
         top_p=top_p,
         max_tokens=max_tokens,
-        thinking_enabled=thinking_enabled,
         stream=stream,
         **{k: v for k, v in kwargs.items() if k not in [
             'api_key', 'endpoint_id', 'endpoint',
             'timeout', 'max_retries', 'retry_delay', 'temperature', 'top_p',
-            'max_tokens', 'thinking_enabled', 'stream'
+            'max_tokens', 'stream'
         ]}
     )
 
