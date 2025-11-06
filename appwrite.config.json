@@ -700,6 +700,7 @@
         {
             "$id": "knowledge_points_library",
             "$permissions": [
+                "create(\"any\")",
                 "read(\"any\")"
             ],
             "databaseId": "main",
@@ -838,7 +839,10 @@
         {
             "$id": "questions",
             "$permissions": [
-                "read(\"any\")"
+                "read(\"any\")",
+                "create(\"users\")",
+                "update(\"users\")",
+                "delete(\"users\")"
             ],
             "databaseId": "main",
             "name": "题目库",
@@ -992,7 +996,7 @@
                     "type": "string",
                     "required": false,
                     "array": false,
-                    "size": 500,
+                    "size": 5000,
                     "default": null,
                     "encrypt": false
                 },
@@ -1048,7 +1052,10 @@
         {
             "$id": "mistake_records",
             "$permissions": [
-                "read(\"any\")"
+                "read(\"any\")",
+                "create(\"users\")",
+                "update(\"users\")",
+                "delete(\"users\")"
             ],
             "databaseId": "main",
             "name": "错题记录",
@@ -2076,6 +2083,21 @@
                     "default": null
                 },
                 {
+                    "key": "isCompleted",
+                    "type": "boolean",
+                    "required": false,
+                    "array": false,
+                    "default": false
+                },
+                {
+                    "key": "completedAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
                     "key": "items",
                     "type": "string",
                     "required": true,
@@ -2101,21 +2123,6 @@
                     "min": 0,
                     "max": 100,
                     "default": 0
-                },
-                {
-                    "key": "isCompleted",
-                    "type": "boolean",
-                    "required": false,
-                    "array": false,
-                    "default": false
-                },
-                {
-                    "key": "completedAt",
-                    "type": "datetime",
-                    "required": false,
-                    "array": false,
-                    "format": "",
-                    "default": null
                 }
             ],
             "indexes": [
