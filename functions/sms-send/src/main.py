@@ -1,178 +1,141 @@
 """
-火山引擎短信发送函数
-使用 SendSmsVerifyCode API 发送验证码到指定手机号
-使用官方SDK: volcengine-python-sdk
+短信发送函数
+支持多个短信服务商：火山引擎、阿里云
+使用模块化架构，可通过环境变量切换服务商
 """
 import os
+import sys
 import json
-from volcengine.ApiInfo import ApiInfo
-from volcengine.Credentials import Credentials
-from volcengine.ServiceInfo import ServiceInfo
-from volcengine.base.Service import Service
+from appwrite.client import Client
+from appwrite.services.databases import Databases
+
+# 添加当前目录到 Python 路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from providers.base import SMSProviderFactory
+from providers.volc_provider import VolcSMSProvider  # 导入以注册
+from providers.aliyun_provider import AliyunSMSProvider  # 导入以注册
+
+
+def _parse_request_body(body):
+    """解析请求体"""
+    if isinstance(body, dict):
+        return body
+    if isinstance(body, str) and body:
+        return json.loads(body)
+    return {}
+
 
 def main(context):
     """发送短信验证码"""
     
     # 解析请求参数
     try:
-        # context.req.body 可能已经是dict，也可能是string
-        if isinstance(context.req.body, dict):
-            payload = context.req.body
-        elif isinstance(context.req.body, str):
-            payload = json.loads(context.req.body) if context.req.body else {}
-        else:
-            payload = {}
+        payload = _parse_request_body(context.req.body)
+        phone = payload.get('phone', '')
     except Exception as e:
         context.error(f'解析请求参数失败: {str(e)}')
-        return context.res.json({
-            'success': False,
-            'message': '无效的请求参数'
-        }, 400)
-    
-    phone = payload.get('phone', '')
-    
-    context.log(f'收到请求，手机号: {phone}')
+        return context.res.json({'success': False, 'message': '无效的请求参数'}, 400)
     
     # 验证手机号
     if not phone:
-        return context.res.json({
-            'success': False,
-            'message': '请提供手机号'
-        }, 400)
+        return context.res.json({'success': False, 'message': '请提供手机号'}, 400)
     
-    # 去掉+86前缀（火山引擎支持带或不带+86）
-    phone_number = phone.replace('+86', '') if phone.startswith('+86') else phone
+    context.log(f'收到请求，手机号: {phone}')
     
-    # 火山引擎配置
-    access_key = os.environ.get('VOLC_ACCESS_KEY')
-    secret_key = os.environ.get('VOLC_SECRET_KEY')
-    sms_account = os.environ.get('VOLC_SMS_ACCOUNT')
-    template_id = os.environ.get('VOLC_SMS_TEMPLATE_ID')
-    sign_name = os.environ.get('VOLC_SMS_SIGN_NAME')
-    
-    if not all([access_key, secret_key, sms_account, template_id, sign_name]):
-        context.log('缺少火山引擎配置')
-        return context.res.json({
-            'success': False,
-            'message': '服务配置错误'
-        }, 500)
+    # 获取短信服务商配置
+    sms_provider = os.environ.get('SMS_PROVIDER', 'aliyun').lower()
+    context.log(f'使用短信服务商: {sms_provider}')
     
     try:
-        # 初始化火山引擎SMS服务
-        service = _get_sms_service(access_key, secret_key)
+        # 创建短信服务商实例并发送验证码
+        provider = _create_sms_provider(sms_provider, context)
+        result = provider.send_verification_code(phone)
         
-        # 构造请求参数
-        body = {
-            'SmsAccount': sms_account,
-            'Sign': sign_name,
-            'TemplateID': template_id,
-            'PhoneNumber': phone_number,
-            'Scene': '登录注册',  # 验证码使用场景
-            'CodeType': 6,  # 6位验证码
-            'ExpireTime': 300,  # 5分钟有效期
-            'TryCount': 3,  # 允许尝试3次
-        }
-        
-        # 调用发送验证码API
-        response_raw = service.json('SendSmsVerifyCode', {}, json.dumps(body))
-        
-        # 解析响应（可能是字符串）
-        if isinstance(response_raw, str):
-            response = json.loads(response_raw)
-        elif isinstance(response_raw, bytes):
-            response = json.loads(response_raw.decode('utf-8'))
+        if result['success']:
+            context.log(f'验证码已发送到 {phone}, MessageID: {result.get("message_id", "")}')
+            return context.res.json({
+                'success': True,
+                'message': result['message'],
+                'data': {
+                    'phone': phone,
+                    'messageId': result.get('message_id', '')
+                }
+            })
         else:
-            response = response_raw
-        
-        context.log(f'API响应: {json.dumps(response, ensure_ascii=False)}')
-        
-        # 检查响应
-        if 'ResponseMetadata' in response:
-            metadata = response['ResponseMetadata']
+            context.log(f'发送短信失败: {result["message"]}')
+            return context.res.json({'success': False, 'message': result['message']}, 500)
             
-            # 检查是否有错误
-            if 'Error' in metadata:
-                error = metadata['Error']
-                error_code = error.get('Code', '')
-                error_msg = error.get('Message', '发送失败')
-                
-                context.log(f'发送短信失败: {error_code} - {error_msg}')
-                
-                # 处理常见错误
-                user_msg = _get_user_friendly_error(error_code, error_msg)
-                
-                return context.res.json({
-                    'success': False,
-                    'message': user_msg
-                }, 500)
-        
-        # 获取结果
-        result = response.get('Result', {})
-        message_ids = result.get('MessageID', [])
-        message_id = message_ids[0] if message_ids else ''
-        
-        context.log(f'验证码已发送到 {phone_number}, MessageID: {message_id}')
-        
-        return context.res.json({
-            'success': True,
-            'message': '验证码已发送',
-            'data': {
-                'phone': phone,
-                'messageId': message_id
-            }
-        })
-        
     except Exception as e:
         context.error(f'发送短信异常: {str(e)}')
-        return context.res.json({
-            'success': False,
-            'message': '发送验证码失败，请稍后重试'
-        }, 500)
+        return context.res.json({'success': False, 'message': '发送验证码失败，请稍后重试'}, 500)
 
 
-def _get_sms_service(access_key, secret_key):
-    """
-    初始化火山引擎SMS服务
-    使用官方SDK
-    """
-    # API信息
-    api_info = {
-        'SendSmsVerifyCode': ApiInfo('POST', '/', {'Action': 'SendSmsVerifyCode', 'Version': '2020-01-01'}, {}, {}),
+def _get_volc_config():
+    """获取火山引擎配置"""
+    config = {
+        'access_key': os.environ.get('VOLC_ACCESS_KEY'),
+        'secret_key': os.environ.get('VOLC_SECRET_KEY'),
+        'sms_account': os.environ.get('VOLC_SMS_ACCOUNT'),
+        'template_id': os.environ.get('VOLC_SMS_TEMPLATE_ID'),
+        'sign_name': os.environ.get('VOLC_SMS_SIGN_NAME'),
     }
     
-    # 服务信息
-    service_info = ServiceInfo(
-        'sms.volcengineapi.com',
-        {},
-        Credentials(access_key, secret_key, 'volcSMS', 'cn-north-1'),
-        10,
-        10,
-        'https'
-    )
+    if not all(config.values()):
+        raise ValueError('火山引擎配置不完整')
     
-    # 创建服务实例
-    service = Service(service_info, api_info)
-    return service
+    return config
 
 
-def _get_user_friendly_error(error_code, error_msg):
-    """将错误码转换为用户友好的错误信息"""
-    error_map = {
-        'RE:0000': '服务暂时不可用，请稍后重试',
-        'RE:0001': '短信服务未开通',
-        'RE:0002': '服务异常，请联系客服',
-        'RE:0003': '服务配置错误',
-        'RE:0004': '短信签名错误',
-        'RE:0005': '短信模板错误',
-        'RE:0006': '手机号格式错误',
-        'RE:0007': 'IP校验失败',
-        'RE:0009': '请求参数错误',
-        'RE:0010': '服务欠费，请联系管理员',
-        'RE:0011': '不支持该地区发送',
-        'RE:0012': '不支持的发送类型',
-        'RE:0013': '发送量超过限制',
-        'RE:0500': '服务异常，请稍后重试',
+def _get_aliyun_config(context):
+    """获取阿里云配置"""
+    config = {
+        'access_key_id': os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID'),
+        'access_key_secret': os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET'),
+        'sign_name': os.environ.get('ALIYUN_SMS_SIGN_NAME'),
+        'template_code': os.environ.get('ALIYUN_SMS_TEMPLATE_CODE'),
     }
     
-    return error_map.get(error_code, f'发送失败: {error_msg}')
+    # 日志输出配置状态（不包含敏感信息）
+    context.log(f'阿里云配置: access_key_id={"已配置" if config["access_key_id"] else "未配置"}, '
+                f'sign_name={config["sign_name"] or "未配置"}, '
+                f'template_code={config["template_code"] or "未配置"}')
+    
+    # 添加数据库客户端用于存储验证码
+    _add_appwrite_config(config, context)
+    
+    return config
 
+
+def _add_appwrite_config(config, context):
+    """添加 Appwrite 数据库配置"""
+    appwrite_endpoint = os.environ.get('APPWRITE_ENDPOINT')
+    appwrite_project_id = os.environ.get('APPWRITE_PROJECT_ID')
+    appwrite_api_key = os.environ.get('APPWRITE_API_KEY')
+    
+    if all([appwrite_endpoint, appwrite_project_id, appwrite_api_key]):
+        client = Client()
+        client.set_endpoint(appwrite_endpoint)
+        client.set_project(appwrite_project_id)
+        client.set_key(appwrite_api_key)
+        
+        config['database_client'] = Databases(client)
+        config['database_id'] = os.environ.get('APPWRITE_DATABASE_ID', 'main')
+        config['verification_codes_collection_id'] = 'sms_verification_codes'
+    else:
+        context.log('Appwrite配置不完整，验证码将无法存储')
+
+
+def _create_sms_provider(provider_name: str, context):
+    """创建短信服务商实例"""
+    
+    config_getters = {
+        'volc': lambda: _get_volc_config(),
+        'aliyun': lambda: _get_aliyun_config(context)
+    }
+    
+    if provider_name not in config_getters:
+        raise ValueError(f'不支持的短信服务商: {provider_name}')
+    
+    config = config_getters[provider_name]()
+    return SMSProviderFactory.create_provider(provider_name, config)

@@ -27,3 +27,6 @@ volcengine-python-sdk-ark-runtime>=1.0.0
 # 日志
 loguru>=0.7.0
 
+# 时区处理
+pytz>=2023.3
+

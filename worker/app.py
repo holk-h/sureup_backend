@@ -20,6 +20,7 @@ from tasks import TaskBase, TaskResponse, TaskStatus, QueueStats, task_registry
 from workers.mistake_analyzer import MistakeAnalyzerWorker
 from workers.daily_task_generator import DailyTaskGeneratorWorker
 from workers.accumulated_mistakes_analyzer import AccumulatedMistakesAnalyzerWorker
+from workers.question_generator import QuestionGeneratorWorker
 
 
 # ========== 全局变量 ==========
@@ -49,6 +50,7 @@ def register_workers():
     task_registry.register('mistake_analyzer', MistakeAnalyzerWorker)
     task_registry.register('daily_task_generator', DailyTaskGeneratorWorker)
     task_registry.register('accumulated_mistakes_analyzer', AccumulatedMistakesAnalyzerWorker)
+    task_registry.register('question_generator', QuestionGeneratorWorker)
     logger.info(f"已注册任务类型: {task_registry.list_task_types()}")
 
 
@@ -271,6 +273,42 @@ async def list_worker_types():
         "worker_types": task_registry.list_task_types(),
         "concurrency": config.WORKER_CONCURRENCY
     }
+
+
+@app.post("/tasks/question_generation")
+async def create_question_generation_task(task_data: Dict[str, Any]):
+    """
+    创建题目生成任务（专用端点）
+    
+    Args:
+        task_data: 任务数据，包含：
+            - task_id: 任务 ID
+            - user_id: 用户 ID
+            - task_type: 任务类型（variant）
+            - source_question_ids: 源题目 ID 列表
+            - variants_per_question: 每题生成的变式数量
+    
+    Returns:
+        任务ID和状态
+    """
+    try:
+        task_id = await task_queue.enqueue(
+            task_type='question_generator',
+            task_data=task_data,
+            priority=5  # 中等优先级
+        )
+        
+        logger.info(f"题目生成任务已入队: {task_id}")
+        
+        return {
+            "success": True,
+            "task_id": task_id,
+            "worker_task_id": task_id,
+            "message": "题目生成任务已入队"
+        }
+    except Exception as e:
+        logger.error(f"创建题目生成任务失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ========== 错误处理 ==========

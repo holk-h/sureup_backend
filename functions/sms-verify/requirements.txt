@@ -1,3 +1,4 @@
 --index-url https://mirrors.aliyun.com/pypi/simple/
 appwrite
 volcengine
+alibabacloud_dysmsapi20170525==4.2.0

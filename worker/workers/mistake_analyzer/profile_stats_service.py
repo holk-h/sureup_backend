@@ -9,6 +9,12 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 from appwrite.services.databases import Databases
 from appwrite.query import Query
+from .timezone_utils import (
+    get_user_timezone_date, 
+    get_user_timezone_datetime,
+    get_user_timezone_iso_string,
+    is_same_date_in_user_timezone
+)
 
 
 DATABASE_ID = os.environ.get('APPWRITE_DATABASE_ID', 'main')
@@ -37,41 +43,44 @@ def get_user_profile(databases: Databases, user_id: str) -> Optional[Dict]:
 
 def check_and_reset_daily_stats(profile: Dict) -> tuple[bool, Dict]:
     """
-    检查是否需要重置每日统计数据
+    检查是否需要重置每日统计数据（基于用户时区）
     
     Returns:
         (需要重置, 更新数据字典)
     """
+    user_timezone = profile.get('timezone')
     last_reset_date = profile.get('lastResetDate')
-    today = datetime.utcnow().date()
+    today = get_user_timezone_date(user_timezone)
     
     # 如果没有重置日期，或者日期不是今天，则需要重置
     if not last_reset_date:
         return True, {
             'todayMistakes': 0,
             'todayPracticeSessions': 0,
-            'lastResetDate': datetime.utcnow().isoformat() + 'Z'
+            'lastResetDate': get_user_timezone_iso_string(user_timezone)
         }
     
     # 解析日期
     try:
         if isinstance(last_reset_date, str):
-            last_reset = datetime.fromisoformat(last_reset_date.replace('Z', '+00:00')).date()
+            last_reset_utc = datetime.fromisoformat(last_reset_date.replace('Z', '+00:00'))
         else:
-            last_reset = last_reset_date.date()
+            last_reset_utc = last_reset_date
         
-        if last_reset < today:
+        # 检查是否是同一天（在用户时区）
+        current_time = get_user_timezone_datetime(user_timezone)
+        if not is_same_date_in_user_timezone(last_reset_utc, current_time, user_timezone):
             return True, {
                 'todayMistakes': 0,
                 'todayPracticeSessions': 0,
-                'lastResetDate': datetime.utcnow().isoformat() + 'Z'
+                'lastResetDate': get_user_timezone_iso_string(user_timezone)
             }
     except Exception as e:
         print(f"解析重置日期失败: {str(e)}")
         return True, {
             'todayMistakes': 0,
             'todayPracticeSessions': 0,
-            'lastResetDate': datetime.utcnow().isoformat() + 'Z'
+            'lastResetDate': get_user_timezone_iso_string(user_timezone)
         }
     
     return False, {}
@@ -79,56 +88,59 @@ def check_and_reset_daily_stats(profile: Dict) -> tuple[bool, Dict]:
 
 def check_and_update_active_days(profile: Dict) -> Dict:
     """
-    检查并更新活跃天数
+    检查并更新活跃天数（基于用户时区）
     
     如果今天是第一次活动，则 activeDays + 1
     
     Returns:
         更新数据字典
     """
+    user_timezone = profile.get('timezone')
     last_active_at = profile.get('lastActiveAt')
-    today = datetime.utcnow().date()
     
     # 如果没有活跃日期，或者不是今天，则递增 activeDays
     if not last_active_at:
         return {
             'activeDays': profile.get('activeDays', 0) + 1,
-            'lastActiveAt': datetime.utcnow().isoformat() + 'Z'
+            'lastActiveAt': get_user_timezone_iso_string(user_timezone)
         }
     
     # 解析日期
     try:
         if isinstance(last_active_at, str):
-            last_active = datetime.fromisoformat(last_active_at.replace('Z', '+00:00')).date()
+            last_active_utc = datetime.fromisoformat(last_active_at.replace('Z', '+00:00'))
         else:
-            last_active = last_active_at.date()
+            last_active_utc = last_active_at
         
-        if last_active < today:
+        # 检查是否是同一天（在用户时区）
+        current_time = get_user_timezone_datetime(user_timezone)
+        if not is_same_date_in_user_timezone(last_active_utc, current_time, user_timezone):
             return {
                 'activeDays': profile.get('activeDays', 0) + 1,
-                'lastActiveAt': datetime.utcnow().isoformat() + 'Z'
+                'lastActiveAt': get_user_timezone_iso_string(user_timezone)
             }
     except Exception as e:
         print(f"解析活跃日期失败: {str(e)}")
         return {
             'activeDays': profile.get('activeDays', 0) + 1,
-            'lastActiveAt': datetime.utcnow().isoformat() + 'Z'
+            'lastActiveAt': get_user_timezone_iso_string(user_timezone)
         }
     
     # 今天已经活跃过了，只更新时间戳
     return {
-        'lastActiveAt': datetime.utcnow().isoformat() + 'Z'
+        'lastActiveAt': get_user_timezone_iso_string(user_timezone)
     }
 
 
 def update_weekly_mistakes_data(profile: Dict) -> str:
     """
-    更新过去一周的错题数据（用于图表显示）
+    更新过去一周的错题数据（用于图表显示，基于用户时区）
     
     Returns:
         JSON 字符串格式的周数据
     """
-    today = datetime.utcnow().date()
+    user_timezone = profile.get('timezone')
+    today = get_user_timezone_date(user_timezone)
     
     # 解析现有数据
     weekly_data_str = profile.get('weeklyMistakesData')
@@ -157,7 +169,7 @@ def update_weekly_mistakes_data(profile: Dict) -> str:
             'count': 1
         })
     
-    # 只保留最近7天的数据
+    # 只保留最近7天的数据（基于用户时区）
     seven_days_ago = today - timedelta(days=6)
     weekly_data = [
         entry for entry in weekly_data
@@ -230,8 +242,9 @@ def update_profile_stats_on_mistake_created(
         weekly_data_json = update_weekly_mistakes_data(profile)
         update_data['weeklyMistakesData'] = weekly_data_json
         
-        # 9. 更新统计时间戳
-        update_data['statsUpdatedAt'] = datetime.utcnow().isoformat() + 'Z'
+        # 9. 更新统计时间戳（基于用户时区）
+        user_timezone = profile.get('timezone')
+        update_data['statsUpdatedAt'] = get_user_timezone_iso_string(user_timezone)
         
         # 10. 执行更新
         databases.update_document(

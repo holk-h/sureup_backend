@@ -339,60 +339,6 @@ def generate_ai_message(kp_data: Dict[str, Any]) -> str:
     return ""
 
 
-def update_review_schedule(
-    review_state_id: str,
-    user_id: str,
-    db: Databases
-):
-    """
-    更新知识点的下次复习日期
-    
-    规则：
-    - 生成任务后，nextReviewDate 应该往后延（避免明天又推送）
-    - 具体间隔根据当前 currentInterval 决定
-    
-    Args:
-        review_state_id: 复习状态记录ID
-        user_id: 用户ID
-        db: 数据库服务
-    """
-    try:
-        review_state = db.get_document('main', 'review_states', review_state_id)
-        
-        current_interval = review_state.get('currentInterval', 1)
-        status = review_state.get('status', 'newLearning')
-        
-        # 根据状态设置基础间隔
-        # 生成任务后延长间隔，等用户完成后再根据反馈调整
-        if status == 'newLearning':
-            next_interval = current_interval
-        elif status == 'reviewing':
-            next_interval = current_interval
-        else:  # mastered
-            next_interval = current_interval
-        
-        # 更新 nextReviewDate
-        today = datetime.now()
-        next_review_date = today + timedelta(days=next_interval)
-        
-        db.update_document(
-            'main',
-            'review_states',
-            review_state_id,
-            {
-                'nextReviewDate': next_review_date.isoformat()
-            }
-        )
-        
-        logger.debug(
-            f"更新复习计划: {review_state_id}, "
-            f"下次复习: {next_review_date.date()}"
-        )
-        
-    except Exception as e:
-        logger.error(f"更新复习计划失败: {review_state_id}, 错误: {e}")
-
-
 def generate_daily_task_for_user(
     user: Dict[str, Any],
     db: Databases
@@ -413,28 +359,81 @@ def generate_daily_task_for_user(
     """
     user_id = user.get('userId')
     difficulty = user.get('dailyTaskDifficulty', 'normal')
-    today = date.today().isoformat()
+    today = date.today()
+    today_str = today.isoformat()
     
-    # 1. 检查今天是否已生成任务
+    # 1. 清理过期的未完成任务（超过7天）
+    try:
+        seven_days_ago = (today - timedelta(days=7)).isoformat()
+        
+        old_tasks_response = db.list_documents(
+            'main',
+            'daily_tasks',
+            queries=[
+                Query.equal('userId', user_id),
+                Query.equal('isCompleted', False),
+                Query.less_than('taskDate', seven_days_ago),
+                Query.limit(50)
+            ]
+        )
+        
+        # 删除过期任务
+        for task in old_tasks_response['documents']:
+            db.delete_document('main', 'daily_tasks', task['$id'])
+            logger.info(f"删除过期任务: {task['$id']} (日期: {task.get('taskDate')})")
+            
+    except Exception as e:
+        logger.warning(f"清理过期任务失败: {e}")
+    
+    # 2. 检查是否有过多的未完成任务（限制为最多2个）
+    try:
+        uncompleted_response = db.list_documents(
+            'main',
+            'daily_tasks',
+            queries=[
+                Query.equal('userId', user_id),
+                Query.equal('isCompleted', False),
+                Query.order_desc('taskDate'),
+                Query.limit(10)
+            ]
+        )
+        
+        uncompleted_count = len(uncompleted_response['documents'])
+        
+        if uncompleted_count >= 2:
+            logger.info(f"用户 {user_id} 已有 {uncompleted_count} 个未完成任务，暂不生成新任务")
+            return {
+                'generated': False,
+                'reason': f'已有 {uncompleted_count} 个未完成任务，请先完成现有任务',
+                'total_questions': 0
+            }
+            
+    except Exception as e:
+        logger.warning(f"检查未完成任务数量失败: {e}")
+    
+    # 3. 检查今天是否已生成任务
     try:
         existing_response = db.list_documents(
             'main',
             'daily_tasks',
             queries=[
                 Query.equal('userId', user_id),
-                Query.equal('taskDate', today)
+                Query.equal('taskDate', today_str)
             ]
         )
         
-        # 如果已存在，删除旧任务（覆盖策略）
-        for task in existing_response['documents']:
-            db.delete_document('main', 'daily_tasks', task['$id'])
-            logger.info(f"删除旧任务: {task['$id']}")
+        if existing_response['documents']:
+            logger.info(f"用户 {user_id} 今天已有任务，跳过生成")
+            return {
+                'generated': False,
+                'reason': '今天已生成任务',
+                'total_questions': 0
+            }
             
     except Exception as e:
-        logger.error(f"检查/删除旧任务失败: {e}")
+        logger.error(f"检查今日任务失败: {e}")
     
-    # 2. 选择知识点
+    # 4. 选择知识点
     selected_kps = select_knowledge_points(user_id, difficulty, db)
     
     if not selected_kps:
@@ -444,7 +443,7 @@ def generate_daily_task_for_user(
             'total_questions': 0
         }
     
-    # 3. 生成任务项
+    # 5. 生成任务项
     task_items = generate_task_items(selected_kps, difficulty, db)
     
     if not task_items:
@@ -454,7 +453,7 @@ def generate_daily_task_for_user(
             'total_questions': 0
         }
     
-    # 4. 统计总题数（现在每个 task_item 就是一道题）
+    # 6. 统计总题数（现在每个 task_item 就是一道题）
     total_questions = len(task_items)
     
     # 检查题目数量是否合理
@@ -467,7 +466,7 @@ def generate_daily_task_for_user(
         # 注意：不阻断任务生成，即使题目少于预期也继续
         # 少量的题目总比没有任务好
     
-    # 5. 构建任务文档
+    # 7. 构建任务文档
     task_data = {
         'userId': user_id,
         'taskDate': datetime.now().isoformat(),
@@ -477,7 +476,7 @@ def generate_daily_task_for_user(
         'isCompleted': False
     }
     
-    # 6. 保存到数据库
+    # 8. 保存到数据库
     try:
         db.create_document(
             'main',
@@ -494,13 +493,12 @@ def generate_daily_task_for_user(
             'total_questions': 0
         }
     
-    # 7. 更新知识点的复习时间
-    for kp_data in selected_kps:
-        update_review_schedule(
-            kp_data['review_state']['$id'],
-            user_id,
-            db
-        )
+    # 9. nextReviewDate 由前端在用户完成任务并提交反馈后更新
+    # 任务生成器只负责查询到期的知识点和生成任务
+    # 通过以下机制控制任务生成：
+    #   - 限制未完成任务数量（最多2个，第 435-449 行）
+    #   - 每天只生成一次（第 451-463 行）
+    #   - 清理超过7天的过期任务（第 412-430 行）
     
     return {
         'generated': True,

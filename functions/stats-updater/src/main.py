@@ -15,6 +15,12 @@ from datetime import datetime, timedelta
 from appwrite.client import Client
 from appwrite.services.databases import Databases
 from appwrite.query import Query
+from .timezone_utils import (
+    get_user_timezone_date, 
+    get_user_timezone_datetime,
+    get_user_timezone_iso_string,
+    is_same_date_in_user_timezone
+)
 
 # Configuration
 DATABASE_ID = os.environ.get('APPWRITE_DATABASE_ID', 'main')
@@ -53,7 +59,7 @@ def get_user_profile_by_user_id(databases: Databases, user_id: str):
 
 def calculate_continuous_days(databases: Databases, user_id: str, profile: dict) -> int:
     """
-    智能计算连续学习天数
+    智能计算连续学习天数（基于用户时区）
     
     规则：
     1. 如果今天有学习活动，且昨天也有，则连续天数+1
@@ -62,10 +68,11 @@ def calculate_continuous_days(databases: Databases, user_id: str, profile: dict)
     
     判断依据：lastPracticeDate 或 lastActiveAt
     """
+    user_timezone = profile.get('timezone')
     last_practice_date = profile.get('lastPracticeDate')
     current_continuous_days = profile.get('continuousDays', 0)
     
-    today = datetime.utcnow().date()
+    today = get_user_timezone_date(user_timezone)
     yesterday = today - timedelta(days=1)
     
     # 如果没有练习日期记录，从0开始
@@ -75,18 +82,22 @@ def calculate_continuous_days(databases: Databases, user_id: str, profile: dict)
     # 解析上次练习日期
     try:
         if isinstance(last_practice_date, str):
-            last_practice = datetime.fromisoformat(last_practice_date.replace('Z', '+00:00')).date()
+            last_practice_utc = datetime.fromisoformat(last_practice_date.replace('Z', '+00:00'))
         else:
-            last_practice = last_practice_date.date()
+            last_practice_utc = last_practice_date
         
-        # 如果上次练习是昨天，连续天数+1
-        if last_practice == yesterday:
+        # 转换为用户时区的日期
+        current_time = get_user_timezone_datetime(user_timezone)
+        
+        # 检查上次练习是昨天还是今天（在用户时区）
+        if is_same_date_in_user_timezone(last_practice_utc, current_time - timedelta(days=1), user_timezone):
+            # 上次练习是昨天，连续天数+1
             return current_continuous_days + 1
-        # 如果上次练习是今天，保持不变（今天已经计算过了）
-        elif last_practice == today:
+        elif is_same_date_in_user_timezone(last_practice_utc, current_time, user_timezone):
+            # 上次练习是今天，保持不变
             return current_continuous_days
-        # 如果上次练习不是昨天或今天，重置为1
         else:
+            # 上次练习不是昨天或今天，重置为1
             return 1
     except Exception as e:
         print(f"解析练习日期失败: {str(e)}")
@@ -199,20 +210,21 @@ def on_practice_session_completed(databases: Databases, session_data: dict):
             print(f"❌ 未找到用户档案: {user_id}")
             return
         
-        current_time = datetime.utcnow()
-        today = current_time.date()
+        user_timezone = profile.get('timezone')
+        current_time = get_user_timezone_datetime(user_timezone)
+        today = get_user_timezone_date(user_timezone)
         
         # 准备更新数据
         update_data = {}
         
-        # 1. 检查是否需要重置每日数据
+        # 1. 检查是否需要重置每日数据（基于用户时区）
         last_reset_date = profile.get('lastResetDate')
         need_reset = False
         
         if last_reset_date:
             try:
-                last_reset = datetime.fromisoformat(last_reset_date.replace('Z', '+00:00')).date()
-                if last_reset < today:
+                last_reset_utc = datetime.fromisoformat(last_reset_date.replace('Z', '+00:00'))
+                if not is_same_date_in_user_timezone(last_reset_utc, current_time, user_timezone):
                     need_reset = True
             except:
                 need_reset = True
@@ -221,7 +233,7 @@ def on_practice_session_completed(databases: Databases, session_data: dict):
         
         if need_reset:
             update_data['todayPracticeSessions'] = 0
-            update_data['lastResetDate'] = current_time.isoformat() + 'Z'
+            update_data['lastResetDate'] = get_user_timezone_iso_string(user_timezone)
             print(f"✓ 重置每日练习统计")
         
         # 2. 递增练习次数
@@ -230,23 +242,23 @@ def on_practice_session_completed(databases: Databases, session_data: dict):
         update_data['totalPracticeSessions'] = profile.get('totalPracticeSessions', 0) + 1
         update_data['completedSessions'] = profile.get('completedSessions', 0) + 1
         
-        # 3. 更新最后练习日期
-        update_data['lastPracticeDate'] = current_time.isoformat() + 'Z'
+        # 3. 更新最后练习日期（基于用户时区）
+        update_data['lastPracticeDate'] = get_user_timezone_iso_string(user_timezone)
         
         # 4. 计算连续学习天数
         continuous_days = calculate_continuous_days(databases, user_id, profile)
         update_data['continuousDays'] = continuous_days
         
-        # 5. 更新活跃时间和统计时间
-        update_data['lastActiveAt'] = current_time.isoformat() + 'Z'
-        update_data['statsUpdatedAt'] = current_time.isoformat() + 'Z'
+        # 5. 更新活跃时间和统计时间（基于用户时区）
+        update_data['lastActiveAt'] = get_user_timezone_iso_string(user_timezone)
+        update_data['statsUpdatedAt'] = get_user_timezone_iso_string(user_timezone)
         
-        # 6. 更新活跃天数（如果今天首次活动）
+        # 6. 更新活跃天数（如果今天首次活动，基于用户时区）
         last_active_at = profile.get('lastActiveAt')
         if last_active_at:
             try:
-                last_active = datetime.fromisoformat(last_active_at.replace('Z', '+00:00')).date()
-                if last_active < today:
+                last_active_utc = datetime.fromisoformat(last_active_at.replace('Z', '+00:00'))
+                if not is_same_date_in_user_timezone(last_active_utc, current_time, user_timezone):
                     update_data['activeDays'] = profile.get('activeDays', 0) + 1
             except:
                 update_data['activeDays'] = profile.get('activeDays', 0) + 1

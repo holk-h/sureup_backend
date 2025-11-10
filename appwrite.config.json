@@ -223,7 +223,10 @@
                 "any"
             ],
             "events": [],
-            "scopes": [],
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
             "schedule": "",
             "timeout": 15,
             "enabled": true,
@@ -232,11 +235,20 @@
             "commands": "pip install -r requirements.txt",
             "path": "functions/sms-send",
             "variables": {
+                "SMS_PROVIDER": "aliyun",
                 "VOLC_ACCESS_KEY": "",
                 "VOLC_SECRET_KEY": "",
                 "VOLC_SMS_ACCOUNT": "",
                 "VOLC_SMS_TEMPLATE_ID": "",
-                "VOLC_SMS_SIGN_NAME": "稳了"
+                "VOLC_SMS_SIGN_NAME": "稳了",
+                "ALIBABA_CLOUD_ACCESS_KEY_ID": "",
+                "ALIBABA_CLOUD_ACCESS_KEY_SECRET": "",
+                "ALIYUN_SMS_SIGN_NAME": "稳了",
+                "ALIYUN_SMS_TEMPLATE_CODE": "",
+                "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
+                "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
+                "APPWRITE_API_KEY": "",
+                "APPWRITE_DATABASE_ID": "main"
             }
         },
         {
@@ -262,9 +274,12 @@
             "commands": "pip install -r requirements.txt",
             "path": "functions/sms-verify",
             "variables": {
+                "SMS_PROVIDER": "aliyun",
                 "VOLC_ACCESS_KEY": "",
                 "VOLC_SECRET_KEY": "",
                 "VOLC_SMS_ACCOUNT": "",
+                "ALIBABA_CLOUD_ACCESS_KEY_ID": "",
+                "ALIBABA_CLOUD_ACCESS_KEY_SECRET": "",
                 "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
                 "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
                 "APPWRITE_API_KEY": "",
@@ -292,6 +307,34 @@
             "entrypoint": "src/main.py",
             "commands": "pip install -r requirements.txt",
             "path": "functions/ai-accumulated-analyzer",
+            "variables": {
+                "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
+                "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
+                "APPWRITE_API_KEY": "",
+                "APPWRITE_DATABASE_ID": "main",
+                "WORKER_API_URL": "http://localhost:8000"
+            }
+        },
+        {
+            "$id": "question-generator-trigger",
+            "name": "题目生成触发器 (L1-Trigger)",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "events": [
+                "databases.*.collections.question_generation_tasks.documents.*.create"
+            ],
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
+            "schedule": "",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/question-generator-trigger",
             "variables": {
                 "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
                 "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
@@ -571,6 +614,15 @@
                     "array": false,
                     "size": 10,
                     "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "timezone",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 50,
+                    "default": "Asia/Shanghai",
                     "encrypt": false
                 }
             ],
@@ -1944,7 +1996,9 @@
         {
             "$id": "review_states",
             "$permissions": [
-                "read(\"any\")"
+                "read(\"any\")",
+                "create(\"users\")",
+                "update(\"users\")"
             ],
             "databaseId": "main",
             "name": "知识点复习状态",
@@ -2365,6 +2419,236 @@
                     "orders": [
                         "ASC",
                         "DESC"
+                    ]
+                }
+            ]
+        },
+        {
+            "$id": "question_generation_tasks",
+            "$permissions": [
+                "create(\"users\")",
+                "read(\"any\")",
+                "update(\"any\")"
+            ],
+            "databaseId": "main",
+            "name": "题目生成任务",
+            "enabled": true,
+            "rowSecurity": true,
+            "columns": [
+                {
+                    "key": "userId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "type",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 20,
+                    "default": "variant",
+                    "encrypt": false
+                },
+                {
+                    "key": "status",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "pending",
+                    "encrypt": false
+                },
+                {
+                    "key": "sourceQuestionIds",
+                    "type": "string",
+                    "required": true,
+                    "array": true,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "generatedQuestionIds",
+                    "type": "string",
+                    "required": false,
+                    "array": true,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "variantsPerQuestion",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 1,
+                    "max": 10,
+                    "default": 1
+                },
+                {
+                    "key": "totalCount",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 1000,
+                    "default": 0
+                },
+                {
+                    "key": "completedCount",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 1000,
+                    "default": 0
+                },
+                {
+                    "key": "error",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 2000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "startedAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "completedAt",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "workerTaskId",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
+                }
+            ],
+            "indexes": [
+                {
+                    "key": "userId_createdAt_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "$createdAt"
+                    ],
+                    "orders": [
+                        "ASC",
+                        "DESC"
+                    ]
+                },
+                {
+                    "key": "userId_status_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "status"
+                    ],
+                    "orders": [
+                        "ASC",
+                        "ASC"
+                    ]
+                },
+                {
+                    "key": "status_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "status"
+                    ],
+                    "orders": [
+                        "ASC"
+                    ]
+                }
+            ]
+        },
+        {
+            "$id": "sms_verification_codes",
+            "$permissions": [
+                "create(\"any\")",
+                "read(\"any\")",
+                "update(\"any\")",
+                "delete(\"any\")"
+            ],
+            "databaseId": "main",
+            "name": "短信验证码",
+            "enabled": true,
+            "rowSecurity": false,
+            "columns": [
+                {
+                    "key": "phone",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 20,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "code",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 10,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "createdAt",
+                    "type": "datetime",
+                    "required": true,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "expiresAt",
+                    "type": "datetime",
+                    "required": true,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                }
+            ],
+            "indexes": [
+                {
+                    "key": "phone_unique",
+                    "type": "unique",
+                    "status": "available",
+                    "columns": [
+                        "phone"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "expiresAt_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "expiresAt"
+                    ],
+                    "orders": [
+                        "ASC"
                     ]
                 }
             ]

@@ -198,7 +198,92 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
             offset += limit
         
         logger.info(f"找到 {len(mistakes)} 道未分析的积累错题")
+        
+        # 关键：填充题目详细信息
+        await self._populate_question_details(mistakes)
+        
         return mistakes
+    
+    async def _populate_question_details(self, mistakes: List[Dict]) -> None:
+        """
+        填充错题的题目详细信息
+        
+        从 questions 表查询题目的完整内容（content、options、answer等）
+        """
+        if not mistakes:
+            return
+        
+        logger.info(f"开始填充 {len(mistakes)} 道错题的题目详细信息")
+        
+        for mistake in mistakes:
+            question_id = mistake.get('questionId')
+            if not question_id:
+                logger.warning(f"错题 {mistake.get('$id')} 没有 questionId，跳过")
+                continue
+            
+            try:
+                # 查询题目详细信息
+                loop = asyncio.get_event_loop()
+                question = await loop.run_in_executor(
+                    None,
+                    self._get_question_sync,
+                    question_id
+                )
+                
+                # 将题目信息合并到错题记录中
+                mistake['content'] = question.get('content', '')
+                mistake['type'] = question.get('type', '')
+                mistake['options'] = question.get('options', [])
+                mistake['answer'] = question.get('answer', '')
+                mistake['explanation'] = question.get('explanation', '')
+                mistake['solvingHint'] = question.get('solvingHint', '')
+                
+                # 填充模块名称
+                module_ids = mistake.get('moduleIds', [])
+                if module_ids and isinstance(module_ids, list):
+                    modules = []
+                    for module_id in module_ids:
+                        try:
+                            module = await loop.run_in_executor(
+                                None,
+                                self._get_module_sync,
+                                module_id
+                            )
+                            modules.append(module.get('name', ''))
+                        except Exception as e:
+                            logger.warning(f"获取模块 {module_id} 失败: {e}")
+                    mistake['modules'] = modules
+                else:
+                    mistake['modules'] = []
+                
+                # 填充知识点名称
+                kp_ids = mistake.get('knowledgePointIds', [])
+                if kp_ids and isinstance(kp_ids, list):
+                    knowledge_points = []
+                    for kp_id in kp_ids:
+                        try:
+                            kp = await loop.run_in_executor(
+                                None,
+                                self._get_knowledge_point_sync,
+                                kp_id
+                            )
+                            knowledge_points.append({
+                                'name': kp.get('name', ''),
+                                'module': '',  # 可以从 moduleId 获取，但这里简化处理
+                            })
+                        except Exception as e:
+                            logger.warning(f"获取知识点 {kp_id} 失败: {e}")
+                    mistake['knowledgePoints'] = knowledge_points
+                else:
+                    mistake['knowledgePoints'] = []
+                
+                logger.debug(f"成功填充错题 {mistake.get('$id')} 的题目信息")
+                
+            except Exception as e:
+                logger.warning(f"获取题目 {question_id} 详情失败: {e}")
+                # 继续处理其他错题，不中断流程
+        
+        logger.info(f"完成填充题目详细信息")
     
     async def _calculate_statistics(
         self,
@@ -256,6 +341,8 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
         """
         # 构建 Prompt
         prompt = self._build_analysis_prompt(mistakes, stats)
+
+        logger.info(f"prompt: {prompt}")
         
         logger.info(f"开始生成分析内容，使用流式 LLM")
         
@@ -265,7 +352,9 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
                 prompt=prompt,
                 temperature=0.7,
                 max_tokens=30000,  # 增加输出长度限制，充分利用长上下文
-                stream=True  # 启用流式输出
+                stream=True,  # 启用流式输出
+                thinking={"type": "enabled"},
+                reasoning_effort="medium"
             )
             
             # 处理流式响应
@@ -377,9 +466,9 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
         
         prompt = f"""你是一位经验丰富、温暖有爱的学习导师，不仅擅长分析学生的学习模式，更精通各学科的知识点、常见题型和解题技巧。
 
-# 学生积累错题概况
+# 学生本次积累错题概况
 
-**错题总数**：{total_count} 道
+**本次错题总数**：{total_count} 道
 
 ## 学科分布
 {subject_text}
@@ -387,7 +476,7 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
 ## 错因分布
 {reason_text}
 
-# 错题详细信息
+# 本次错题详细信息
 
 {mistakes_detail}
 
@@ -395,7 +484,11 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
 
 # 你的任务
 
-请基于以上完整的学习数据，生成一份**深度学习指导报告**（Markdown格式）。这份报告要能真正帮助学生突破瓶颈、掌握方法、获得进步。
+请**仅针对本次提供的这 {total_count} 道错题**，生成一份**深度学习指导报告**（Markdown格式）。
+
+- 只分析这次的错题，不要泛泛而谈或讨论其他内容
+- 所有分析必须基于上面提供的具体错题和数据
+- 必须结合具体的错题内容、错因、备注来给出针对性建议
 
 ## 📊 学习现状洞察
 
@@ -419,7 +512,7 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
 ## 学习突破指南
 
 ### 核心攻坚点
-明确指出**当前最应该攻克的2-3个核心问题**，说明为什么这些是关键，解决它们能带来什么改变。
+明确指出**当前最应该攻克的一些核心问题**，说明为什么这些是关键，解决它们能带来什么改变。
 
 ### 具体学习方法
 
@@ -471,6 +564,27 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
 
 ---
 
+# 📝 输出格式示例
+
+```markdown
+## 📊 学习现状洞察
+
+### 主要学习盲区
+
+从本次的 15 道错题来看，你在**物理力学**和**数学函数**两个板块存在明显的薄弱环节：
+
+- **物理力学**（6道题，占40%）：主要集中在受力分析和动量守恒，从备注"不会分解力"、"忘记动量守恒条件"来看，问题的根源在于**对矢量分解和守恒条件的理解不够深入**
+- **数学函数**（5道题，占33%）：二次函数和三角函数都有出错，备注显示"不知道怎么配方"、"三角公式记混了"
+
+### 突出的问题模式
+
+本次错题的错因主要是：
+- **概念理解不清**（7道，47%）：这是当前最核心的问题...
+
+（继续详细分析...）
+
+---
+
 **撰写要求**：
 - 语气像一位既专业又温暖的导师
 - 分析要**基于具体数据和错题**，有理有据
@@ -479,7 +593,7 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
 - 适度使用 emoji 增加亲和力
 - 确保学生看完能有实质收获
 
-直接输出 Markdown 内容，不要添加任何说明或前缀。"""
+直接输出 Markdown 内容，不要添加任何说明或前缀，**结尾不要有落款**。"""
         
         return prompt
     
@@ -487,7 +601,7 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
         """
         格式化错题详细信息
         
-        显示每道题的：学科、错因、备注、是否重要
+        显示每道题的完整内容：题目、选项、答案、知识点、错因、备注等
         不限制数量和长度，充分利用 LLM 的长上下文能力
         """
         if not mistakes:
@@ -499,26 +613,79 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
         for i, mistake in enumerate(mistakes, 1):
             subject = SUBJECT_NAMES.get(mistake.get('subject', ''), '未知学科')
             error_reason = ERROR_REASON_NAMES.get(mistake.get('errorReason', ''), '未标记')
-            # 使用 or '' 来处理 None 值
             note = (mistake.get('note') or '').strip()
             is_important = mistake.get('isImportant', False)
             
+            # 题目类型映射
+            type_map = {
+                'choice': '选择题',
+                'fillBlank': '填空题',
+                'shortAnswer': '简答题',
+                'essay': '论述题'
+            }
+            question_type = type_map.get(mistake.get('type', ''), '未知类型')
+            
             # 构建单条错题信息
-            detail = f"**错题 {i}** - {subject}"
+            detail = f"**错题 {i}** - {subject} - {question_type}"
             
             if is_important:
                 detail += " 🔴 重要"
             
-            detail += f"\n- 错因：{error_reason}"
+            # 题目内容
+            content = (mistake.get('content') or '').strip()
+            if content:
+                detail += f"\n\n**题目：**\n{content}"
             
+            # 选项（选择题）
+            options = mistake.get('options', [])
+            if options and isinstance(options, list) and len(options) > 0:
+                detail += f"\n\n**选项：**"
+                for option in options:
+                    detail += f"\n{option}"
+            
+            # 正确答案
+            answer = (mistake.get('answer') or '').strip()
+            if answer:
+                detail += f"\n\n**正确答案：** {answer}"
+            
+            # 用户答案
+            user_answer = (mistake.get('userAnswer') or '').strip()
+            if user_answer:
+                detail += f"\n\n**学生答案：** {user_answer}"
+            
+            # 知识点
+            knowledge_points = mistake.get('knowledgePoints', [])
+            if knowledge_points and isinstance(knowledge_points, list):
+                kp_names = [kp.get('name', '') for kp in knowledge_points if kp.get('name')]
+                if kp_names:
+                    detail += f"\n\n**涉及知识点：** {', '.join(kp_names)}"
+            
+            # 模块
+            modules = mistake.get('modules', [])
+            if modules and isinstance(modules, list) and len(modules) > 0:
+                detail += f"\n\n**所属模块：** {', '.join(modules)}"
+            
+            # 解析（如果有）
+            explanation = (mistake.get('explanation') or '').strip()
+            if explanation:
+                detail += f"\n\n**题目解析：**\n{explanation}"
+            
+            # 解题提示（如果有）
+            solving_hint = (mistake.get('solvingHint') or '').strip()
+            if solving_hint:
+                detail += f"\n\n**解题提示：**\n{solving_hint}"
+            
+            # 错因
+            detail += f"\n\n**学生标记的错因：** {error_reason}"
+            
+            # 备注
             if note:
-                # 保留完整备注内容
-                detail += f"\n- 备注：{note}"
+                detail += f"\n\n**学生备注：** {note}"
             
             details.append(detail)
         
-        result = '\n\n'.join(details)
-        result += f"\n\n（以上为全部 {total_count} 道错题的详细信息）"
+        result = '\n\n---\n\n'.join(details)
+        result += f"\n\n---\n\n（以上为全部 {total_count} 道错题的详细信息）"
         
         return result
     
@@ -602,4 +769,28 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
         except Exception as e:
             logger.error(f"更新分析状态失败: {e}")
             # 不抛出异常，避免中断流程
+    
+    def _get_question_sync(self, question_id: str) -> Dict:
+        """同步获取题目详情（用于 executor）"""
+        return self.databases.get_document(
+            database_id=DATABASE_ID,
+            collection_id=COLLECTION_QUESTIONS,
+            document_id=question_id
+        )
+    
+    def _get_module_sync(self, module_id: str) -> Dict:
+        """同步获取模块详情（用于 executor）"""
+        return self.databases.get_document(
+            database_id=DATABASE_ID,
+            collection_id='knowledge_points_library',
+            document_id=module_id
+        )
+    
+    def _get_knowledge_point_sync(self, kp_id: str) -> Dict:
+        """同步获取知识点详情（用于 executor）"""
+        return self.databases.get_document(
+            database_id=DATABASE_ID,
+            collection_id=COLLECTION_USER_KP,
+            document_id=kp_id
+        )
 
