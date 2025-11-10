@@ -288,6 +288,36 @@
             }
         },
         {
+            "$id": "apple-signin",
+            "name": "苹果登录验证",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [
+                "users.read",
+                "users.write",
+                "databases.read"
+            ],
+            "schedule": "",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/apple-signin",
+            "variables": {
+                "APPLE_CLIENT_ID": "",
+                "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
+                "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
+                "APPWRITE_API_KEY": "",
+                "APPWRITE_DATABASE_ID": "main",
+                "APPWRITE_USERS_COLLECTION_ID": "profiles"
+            }
+        },
+        {
             "$id": "ai-accumulated-analyzer",
             "name": "AI积累错题分析 (L2)",
             "runtime": "python-3.9",
@@ -2496,7 +2526,7 @@
                 {
                     "key": "type",
                     "type": "string",
-                    "required": true,
+                    "required": false,
                     "array": false,
                     "size": 20,
                     "default": "variant",
