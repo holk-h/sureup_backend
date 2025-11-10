@@ -19,6 +19,11 @@ from .question_selector import (
     select_wrong_questions,
     check_if_all_correct_last_time
 )
+from .timezone_utils import (
+    get_user_timezone_date,
+    get_user_timezone_datetime,
+    get_user_timezone_iso_string
+)
 
 
 def get_active_users(db: Databases) -> List[Dict[str, Any]]:
@@ -53,6 +58,7 @@ def get_active_users(db: Databases) -> List[Dict[str, Any]]:
 def select_knowledge_points(
     user_id: str,
     difficulty: str,
+    user_timezone: str,
     db: Databases
 ) -> List[Dict[str, Any]]:
     """
@@ -61,12 +67,14 @@ def select_knowledge_points(
     Args:
         user_id: 用户ID
         difficulty: 难度设置 ('easy' | 'normal' | 'hard')
+        user_timezone: 用户时区（如 'Asia/Shanghai'）
         db: 数据库服务
         
     Returns:
         选中的知识点列表（带优先级）
     """
-    today = date.today().isoformat()
+    # 使用用户时区的当前日期
+    today = get_user_timezone_date(user_timezone).isoformat()
     
     # 1. 获取到期的知识点
     try:
@@ -126,8 +134,9 @@ def select_knowledge_points(
             )
             questions = questions_response['documents']
             
-            # 计算优先级
-            priority = calculate_priority(rs, user_kp, mistakes, questions)
+            # 计算优先级（传入用户时区的今天）
+            today_date = get_user_timezone_date(user_timezone)
+            priority = calculate_priority(rs, user_kp, mistakes, questions, today_date)
             
             kp_with_priority.append({
                 'review_state': rs,
@@ -359,7 +368,10 @@ def generate_daily_task_for_user(
     """
     user_id = user.get('userId')
     difficulty = user.get('dailyTaskDifficulty', 'normal')
-    today = date.today()
+    user_timezone = user.get('timezone', 'Asia/Shanghai')  # 获取用户时区
+    
+    # 使用用户时区的当前日期
+    today = get_user_timezone_date(user_timezone)
     today_str = today.isoformat()
     
     # 1. 清理过期的未完成任务（超过7天）
@@ -434,7 +446,7 @@ def generate_daily_task_for_user(
         logger.error(f"检查今日任务失败: {e}")
     
     # 4. 选择知识点
-    selected_kps = select_knowledge_points(user_id, difficulty, db)
+    selected_kps = select_knowledge_points(user_id, difficulty, user_timezone, db)
     
     if not selected_kps:
         return {
@@ -467,9 +479,10 @@ def generate_daily_task_for_user(
         # 少量的题目总比没有任务好
     
     # 7. 构建任务文档
+    # 使用用户时区的当前时间，并转换为UTC存储
     task_data = {
         'userId': user_id,
-        'taskDate': datetime.now().isoformat(),
+        'taskDate': get_user_timezone_iso_string(user_timezone),
         'items': json.dumps(task_items, ensure_ascii=False),
         'totalQuestions': total_questions,
         'completedCount': 0,

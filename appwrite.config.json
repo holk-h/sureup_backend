@@ -342,6 +342,28 @@
                 "APPWRITE_DATABASE_ID": "main",
                 "WORKER_API_URL": "http://localhost:8000"
             }
+        },
+        {
+            "$id": "mastery-score-aggregator",
+            "name": "掌握度聚合器 (L1-Trigger)",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "events": [
+                "databases.*.collections.review_states.documents.*.create",
+                "databases.*.collections.review_states.documents.*.update"
+            ],
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
+            "schedule": "",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/mastery-score-aggregator"
         }
     ],
     "tablesDB": [
@@ -542,6 +564,15 @@
                     "encrypt": false
                 },
                 {
+                    "key": "weeklyReviewData",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 2000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
                     "key": "lastReviewAt",
                     "type": "datetime",
                     "required": false,
@@ -623,6 +654,15 @@
                     "array": false,
                     "size": 50,
                     "default": "Asia/Shanghai",
+                    "encrypt": false
+                },
+                {
+                    "key": "subjectMasteryScores",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 2000,
+                    "default": null,
                     "encrypt": false
                 }
             ],
@@ -754,6 +794,15 @@
                     "size": 100,
                     "default": null,
                     "encrypt": false
+                },
+                {
+                    "key": "masteryScore",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 100,
+                    "default": null
                 }
             ],
             "indexes": [
@@ -2019,7 +2068,7 @@
                     "type": "string",
                     "required": true,
                     "array": false,
-                    "size": 36,
+                    "size": 128,
                     "default": null,
                     "encrypt": false
                 },

@@ -19,17 +19,36 @@ TOMORROW_DATE = date.today() + timedelta(days=1)
 TOMORROW = TOMORROW_DATE.isoformat()
 
 # Monkey patch: 让系统认为今天是明天
-import workers.daily_task_generator.task_generator as task_gen_module
-import workers.daily_task_generator.priority_calculator as priority_calc_module
+# 注意：由于现在使用了时区工具，需要修改 timezone_utils 模块
+import workers.daily_task_generator.timezone_utils as tz_module
 
-class MockDate(date):
-    @classmethod
-    def today(cls):
-        return TOMORROW_DATE
+# 备份原始函数
+original_get_user_timezone_date = tz_module.get_user_timezone_date
+original_get_user_timezone_datetime = tz_module.get_user_timezone_datetime
 
-# 替换所有相关模块的 date
-task_gen_module.date = MockDate
-priority_calc_module.date = MockDate
+# 修改时区工具函数，使其返回"明天"
+def mock_get_user_timezone_date(user_timezone=None):
+    return TOMORROW_DATE
+
+def mock_get_user_timezone_datetime(user_timezone=None):
+    import pytz
+    if not user_timezone:
+        user_timezone = 'Asia/Shanghai'
+    try:
+        tz = pytz.timezone(user_timezone)
+        # 返回明天的datetime
+        now = datetime.now(tz)
+        tomorrow_dt = now + timedelta(days=1)
+        return tomorrow_dt
+    except:
+        tz = pytz.timezone('Asia/Shanghai')
+        now = datetime.now(tz)
+        tomorrow_dt = now + timedelta(days=1)
+        return tomorrow_dt
+
+# 替换时区工具函数
+tz_module.get_user_timezone_date = mock_get_user_timezone_date
+tz_module.get_user_timezone_datetime = mock_get_user_timezone_datetime
 
 
 def get_databases() -> Databases:

@@ -11,7 +11,8 @@ def calculate_priority(
     review_state: Dict[str, Any],
     user_kp: Dict[str, Any],
     mistake_records: List[Dict[str, Any]],
-    questions: List[Dict[str, Any]]
+    questions: List[Dict[str, Any]],
+    today: date = None
 ) -> float:
     """
     计算知识点的复习优先级（0-100分）
@@ -29,13 +30,16 @@ def calculate_priority(
         user_kp: 用户知识点信息（包含 importance 字段）
         mistake_records: 相关错题记录
         questions: 知识点相关的题目列表
+        today: 用户时区的"今天"日期（用于时区感知计算）
         
     Returns:
         优先级分数 (0-100)
     """
+    if today is None:
+        today = date.today()
     
     # 1. 紧急度（0-100分）- 最高权重
-    urgency_score = calculate_urgency_score(review_state, mistake_records)
+    urgency_score = calculate_urgency_score(review_state, mistake_records, today)
     
     # 2. 用户标记（0-100分）- 显著提升权重
     user_mark_score = calculate_user_mark_score(mistake_records)
@@ -44,7 +48,7 @@ def calculate_priority(
     importance_score = calculate_importance_score_from_kp(user_kp)
     
     # 4. 遗忘风险（0-100分）- 适当提升权重
-    forget_risk = calculate_forget_risk(review_state)
+    forget_risk = calculate_forget_risk(review_state, today)
     
     # 综合计算（新权重）
     priority = (
@@ -159,7 +163,8 @@ def calculate_importance_score_from_questions(
 
 def calculate_urgency_score(
     review_state: Dict[str, Any],
-    mistake_records: List[Dict[str, Any]]
+    mistake_records: List[Dict[str, Any]],
+    today: date = None
 ) -> float:
     """
     计算紧急度分数
@@ -167,11 +172,13 @@ def calculate_urgency_score(
     Args:
         review_state: 知识点复习状态
         mistake_records: 相关错题记录
+        today: 用户时区的"今天"日期
         
     Returns:
         紧急度分数 (0-100)
     """
-    today = date.today()
+    if today is None:
+        today = date.today()
     
     # 获取下次复习日期
     next_review_str = review_state.get('nextReviewDate')
@@ -217,7 +224,7 @@ def calculate_urgency_score(
     return 0.0
 
 
-def calculate_forget_risk(review_state: Dict[str, Any]) -> float:
+def calculate_forget_risk(review_state: Dict[str, Any], today: date = None) -> float:
     """
     计算遗忘风险分数（基于艾宾浩斯遗忘曲线）
     
@@ -235,11 +242,15 @@ def calculate_forget_risk(review_state: Dict[str, Any]) -> float:
     
     Args:
         review_state: 知识点复习状态
+        today: 用户时区的"今天"日期
         
     Returns:
         遗忘风险分数 (0-100)
     """
     import math
+    
+    if today is None:
+        today = date.today()
     
     last_review_str = review_state.get('lastReviewDate')
     if not last_review_str:
@@ -254,7 +265,6 @@ def calculate_forget_risk(review_state: Dict[str, Any]) -> float:
         logger.error(f"解析最后复习日期失败: {last_review_str}, 错误: {e}")
         return 0.0
     
-    today = date.today()
     days_passed = (today - last_review).days
     current_interval = review_state.get('currentInterval', 1)
     
