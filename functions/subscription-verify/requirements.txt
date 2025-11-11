@@ -1,0 +1,6 @@
+--index-url https://mirrors.aliyun.com/pypi/simple/
+appwrite
+httpx
+PyJWT
+cryptography
+

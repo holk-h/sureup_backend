@@ -22,6 +22,7 @@ from appwrite.id import ID
 from mistake_service import create_mistake_record
 from knowledge_point_service import ensure_knowledge_point
 from utils import success_response, error_response, parse_request_body, get_user_id
+from subscription_utils import check_daily_mistake_limit, increment_daily_mistake_count
 
 
 # Configuration
@@ -55,6 +56,11 @@ def handle_create_from_question(body: dict, user_id: str) -> dict:
     直接写入数据库，只返回ID
     """
     databases = get_databases()
+    
+    # 🔒 权限检查：每日错题录入限制
+    is_allowed, error_msg, profile = check_daily_mistake_limit(databases, user_id, DATABASE_ID)
+    if not is_allowed:
+        raise ValueError(error_msg)
     
     question_id = body.get('questionId')
     error_reason = body.get('errorReason', 'conceptError')
@@ -145,6 +151,10 @@ def handle_create_from_question(body: dict, user_id: str) -> dict:
         note=note,
         original_image_urls=[]
     )
+    
+    # 4. 更新每日计数（仅免费用户需要）
+    if profile and profile.get('subscriptionStatus') != 'active':
+        increment_daily_mistake_count(databases, profile['$id'], DATABASE_ID)
     
     # 只返回ID
     return {

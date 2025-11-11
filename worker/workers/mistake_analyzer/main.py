@@ -6,12 +6,12 @@ Event Trigger:
 - databases.*.collections.mistake_records.documents.*.create
 - databases.*.collections.mistake_records.documents.*.update
 
-新设计：一条错题记录 = 一道题 = 一张图片
+新设计：一条错题记录 = 一道题 = 一张或多张图片（支持跨页题目）
 
 工作流程:
-1. Flutter 端上传图片到 bucket，为每张图片创建一个 mistake_record (analysisStatus: "pending")
+1. Flutter 端上传图片到 bucket，为每道题创建一个 mistake_record (analysisStatus: "pending")
 2. 本 function 被自动触发（create 事件）
-3. 下载图片 -> OCR 分析 -> 创建题目 -> 更新错题记录
+3. 下载图片（支持多张） -> OCR 分析 -> 创建题目 -> 更新错题记录
 4. 更新 analysisStatus 为 "completed" 或 "failed"
 5. Flutter 端通过 Realtime API 订阅更新，实时显示分析结果
 """
@@ -80,7 +80,7 @@ def download_image_from_storage(storage: Storage, file_id: str) -> bytes:
 
 async def process_mistake_analysis(record_data: dict, databases: Databases, storage: Storage):
     """
-    处理错题分析的核心逻辑 - 简化版：一条记录 = 一道题
+    处理错题分析的核心逻辑 - 支持单图和多图题
     
     Args:
         record_data: 错题记录文档数据
@@ -89,12 +89,12 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
     """
     record_id = record_data['$id']
     user_id = record_data['userId']
-    original_image_id = record_data.get('originalImageId')
+    original_image_ids = record_data.get('originalImageIds', [])
     wrong_reason = record_data.get('wrongReason')  # 获取用户反馈的错误原因
     question_id = record_data.get('questionId')  # 获取关联的题目ID（如果是重新识别）
     
     # 验证必要字段
-    if not original_image_id:
+    if not original_image_ids or len(original_image_ids) == 0:
         raise ValueError("错题记录缺少图片ID")
     
     # 如果有用户反馈且有题目ID，说明这是重新识别，需要读取上次的识别结果
@@ -126,16 +126,21 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
     print(f"✓ 状态更新为 processing")
     
     try:
-        # 2. 下载图片并转换为 base64
-        print(f"下载图片: {original_image_id}")
-        image_bytes = download_image_from_storage(storage, original_image_id)
+        # 2. 下载所有图片并转换为 base64
         import base64
-        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        image_base64_list = []
+        for i, image_id in enumerate(original_image_ids):
+            print(f"下载图片 {i+1}/{len(original_image_ids)}: {image_id}")
+            image_bytes = download_image_from_storage(storage, image_id)
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            image_base64_list.append(image_base64)
         
-        # 3. 第一步：OCR 提取题目内容和学科识别
+        print(f"✓ 成功下载 {len(image_base64_list)} 张图片")
+        
+        # 3. 第一步：OCR 提取题目内容和学科识别（支持多张图片）
         print("开始OCR识别和学科识别...")
         step1_result = await extract_question_content(
-            image_base64, 
+            image_base64_list, 
             user_feedback=wrong_reason,
             previous_result=previous_result
         )
@@ -173,7 +178,7 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
                 options=step1_result.get('options'),
                 answer='',
                 explanation='',
-                image_ids=[original_image_id],
+                image_ids=original_image_ids,  # 传递所有原始图片ID（支持多图）
                 created_by=user_id,
                 source='ocr'
             )

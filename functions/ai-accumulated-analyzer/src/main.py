@@ -10,7 +10,7 @@ Function 负责：
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from appwrite.client import Client
 from appwrite.services.databases import Databases
 from appwrite.id import ID
@@ -151,6 +151,111 @@ def count_accumulated_mistakes(databases: Databases, user_id: str) -> int:
         return 0
 
 
+def check_accumulated_analysis_limit(databases: Databases, user_id: str) -> tuple:
+    """
+    检查用户积累错题分析限制
+    
+    免费用户：每天最多 1 次
+    会员用户：无限制
+    
+    返回: (是否允许, 错误消息, 用户档案)
+    """
+    try:
+        # 获取用户档案
+        profiles = databases.list_documents(
+            database_id=DATABASE_ID,
+            collection_id='profiles',
+            queries=[
+                Query.equal('userId', user_id),
+                Query.limit(1)
+            ]
+        )
+        
+        if not profiles['documents']:
+            return False, "用户档案不存在", None
+        
+        profile = profiles['documents'][0]
+        
+        # 检查订阅状态
+        subscription_status = profile.get('subscriptionStatus', 'free')
+        
+        # 会员用户无限制
+        if subscription_status == 'active':
+            expiry_date = profile.get('subscriptionExpiryDate')
+            if expiry_date:
+                expiry_datetime = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+                if expiry_datetime > datetime.now(timezone.utc):
+                    return True, None, profile
+        
+        # 免费用户：检查每日限制
+        today = datetime.now(timezone.utc).date()
+        reset_date = profile.get('dailyLimitsResetDate')
+        today_analyses = profile.get('todayAccumulatedAnalysis', 0)
+        
+        # 检查是否需要重置计数
+        if reset_date:
+            reset_datetime = datetime.fromisoformat(reset_date.replace('Z', '+00:00'))
+            reset_date_only = reset_datetime.date()
+            
+            if reset_date_only < today:
+                # 需要重置
+                today_analyses = 0
+                databases.update_document(
+                    database_id=DATABASE_ID,
+                    collection_id='profiles',
+                    document_id=profile['$id'],
+                    data={
+                        'todayAccumulatedAnalysis': 0,
+                        'dailyLimitsResetDate': datetime.now(timezone.utc).isoformat()
+                    }
+                )
+                profile['todayAccumulatedAnalysis'] = 0
+        else:
+            # 首次使用
+            databases.update_document(
+                database_id=DATABASE_ID,
+                collection_id='profiles',
+                document_id=profile['$id'],
+                data={
+                    'dailyLimitsResetDate': datetime.now(timezone.utc).isoformat()
+                }
+            )
+        
+        # 检查是否超限（免费用户每天最多 1 次）
+        FREE_USER_DAILY_LIMIT = 1
+        if today_analyses >= FREE_USER_DAILY_LIMIT:
+            return False, f"今日免费额度已用完（{FREE_USER_DAILY_LIMIT}/{FREE_USER_DAILY_LIMIT}），升级会员享无限制", profile
+        
+        return True, None, profile
+        
+    except Exception as e:
+        return False, f"权限检查失败: {str(e)}", None
+
+
+def increment_accumulated_analysis_count(databases: Databases, profile_id: str):
+    """增加今日积累分析计数"""
+    try:
+        profile = databases.get_document(
+            database_id=DATABASE_ID,
+            collection_id='profiles',
+            document_id=profile_id
+        )
+        
+        current_count = profile.get('todayAccumulatedAnalysis', 0)
+        databases.update_document(
+            database_id=DATABASE_ID,
+            collection_id='profiles',
+            document_id=profile_id,
+            data={
+                'todayAccumulatedAnalysis': current_count + 1
+            }
+        )
+        return True
+    except Exception as e:
+        print(f"更新每日计数失败: {str(e)}")
+        return False
+
+
 def main(context):
     """Main entry point for Appwrite Function"""
     try:
@@ -168,6 +273,11 @@ def main(context):
         
         # 初始化数据库
         databases = get_databases()
+        
+        # 🔒 权限检查：积累错题分析每日限制
+        is_allowed, error_msg, profile = check_accumulated_analysis_limit(databases, user_id)
+        if not is_allowed:
+            return res.json(error_response(error_msg, 403))
         
         # 检查是否有进行中的分析
         existing = databases.list_documents(
@@ -235,6 +345,10 @@ def main(context):
                 data={'status': 'failed'}
             )
             return res.json(error_response("Failed to trigger worker task", 500))
+        
+        # 更新每日计数（仅免费用户需要）
+        if profile and profile.get('subscriptionStatus') != 'active':
+            increment_accumulated_analysis_count(databases, profile['$id'])
         
         # 返回分析记录 ID
         return res.json(success_response({

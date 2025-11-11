@@ -254,8 +254,8 @@ class VolcengineLLMProvider:
     async def chat_with_vision(
         self,
         prompt: str,
-        image_url: Optional[str] = None,
-        image_base64: Optional[str] = None,
+        image_url: Optional[Union[str, List[str]]] = None,
+        image_base64: Optional[Union[str, List[str]]] = None,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -266,14 +266,14 @@ class VolcengineLLMProvider:
         **kwargs
     ) -> str:
         """
-        视觉对话（多模态，异步）
+        视觉对话（多模态，异步）- 支持单图和多图
         
         注意：image_url 和 image_base64 只需提供一个
         
         Args:
             prompt: 用户提示词
-            image_url: 图片 URL（二选一）
-            image_base64: 图片 base64 编码（二选一，需包含 data:image/...;base64, 前缀）
+            image_url: 图片 URL 或 URL 列表
+            image_base64: 图片 base64 编码或编码列表（需包含 data:image/...;base64, 前缀）
             system_prompt: 系统提示词
             temperature: 温度参数
             top_p: Top-P 采样参数
@@ -324,8 +324,8 @@ class VolcengineLLMProvider:
     async def _chat_with_vision_sdk(
         self,
         prompt: str,
-        image_url: Optional[str] = None,
-        image_base64: Optional[str] = None,
+        image_url: Optional[Union[str, List[str]]] = None,
+        image_base64: Optional[Union[str, List[str]]] = None,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -335,7 +335,7 @@ class VolcengineLLMProvider:
         stream: bool = False,
         **kwargs
     ) -> str:
-        """使用火山引擎 SDK 进行视觉对话"""
+        """使用火山引擎 SDK 进行视觉对话 - 支持多图"""
         
         async def _make_request():
             # 构建消息
@@ -346,20 +346,26 @@ class VolcengineLLMProvider:
             # 构建包含图片的消息内容
             content = [{"type": "text", "text": prompt}]
             
+            # 处理图片 URL（支持列表）
             if image_url:
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": image_url}
-                })
+                urls = [image_url] if isinstance(image_url, str) else image_url
+                for url in urls:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": url}
+                    })
+            # 处理 base64 图片（支持列表）
             elif image_base64:
-                # 确保有正确的前缀
-                formatted_image = image_base64
-                if not formatted_image.startswith('data:'):
-                    formatted_image = f"data:image/jpeg;base64,{formatted_image}"
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": formatted_image}
-                })
+                base64_list = [image_base64] if isinstance(image_base64, str) else image_base64
+                for b64 in base64_list:
+                    # 确保有正确的前缀
+                    formatted_image = b64
+                    if not formatted_image.startswith('data:'):
+                        formatted_image = f"data:image/jpeg;base64,{formatted_image}"
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": formatted_image}
+                    })
             
             messages.append({"role": "user", "content": content})
             

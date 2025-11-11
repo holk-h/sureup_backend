@@ -21,7 +21,8 @@ import httpx
 from appwrite.client import Client
 from appwrite.services.databases import Databases
 from appwrite.exception import AppwriteException
-from datetime import datetime
+from appwrite.query import Query
+from datetime import datetime, timezone
 
 
 def main(context):
@@ -48,21 +49,30 @@ def main(context):
     try:
         # 解析事件数据
         if not context.req.body:
+            context.res.status_code = 400
             return context.res.json({
                 'success': False,
                 'error': '无事件数据'
-            }, status=400)
+            })
         
+        # context.req.body 在事件触发器中可能已经是字典对象
+        if isinstance(context.req.body, dict):
+            event_data = context.req.body
+        elif isinstance(context.req.body, str):
         event_data = json.loads(context.req.body)
+        else:
+            event_data = {}
+            
         context.log(f"[题目生成触发器] 收到事件: {json.dumps(event_data, ensure_ascii=False)}")
         
         # 获取任务文档 ID
         task_id = event_data.get('$id')
         if not task_id:
+            context.res.status_code = 400
             return context.res.json({
                 'success': False,
                 'error': '缺少任务 ID'
-            }, status=400)
+            })
         
         # 获取任务详情
         task = databases.get_document(
@@ -73,14 +83,66 @@ def main(context):
         
         context.log(f"[题目生成触发器] 任务详情: ID={task_id}, 用户={task['userId']}, 类型={task['type']}")
         
-        # 验证任务数据
+        # 🔒 权限检查：变式题生成仅限会员
         user_id = task.get('userId')
+        if not user_id:
+            raise ValueError('缺少 userId')
+        
+        # 获取用户档案
+        profiles = databases.list_documents(
+            database_id=database_id,
+            collection_id='profiles',
+            queries=[
+                Query.equal('userId', user_id),
+                Query.limit(1)
+            ]
+        )
+        
+        if not profiles['documents']:
+            raise ValueError('用户档案不存在')
+        
+        profile = profiles['documents'][0]
+        subscription_status = profile.get('subscriptionStatus', 'free')
+        
+        # 检查是否为活跃会员
+        is_premium = False
+        if subscription_status == 'active':
+            expiry_date = profile.get('subscriptionExpiryDate')
+            if expiry_date:
+                expiry_datetime = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+                if expiry_datetime > datetime.now(timezone.utc):
+                    is_premium = True
+        
+        # 免费用户不能生成变式题
+        if not is_premium:
+            error_msg = '变式题生成功能仅限会员使用，请升级会员解锁'
+            context.log(f"[题目生成触发器] 权限不足: {error_msg}")
+            
+            # 更新任务状态为 failed
+            databases.update_document(
+                database_id=database_id,
+                collection_id='question_generation_tasks',
+                document_id=task_id,
+                data={
+                    'status': 'failed',
+                    'error': error_msg,
+                    'completedAt': datetime.utcnow().isoformat() + 'Z'
+                }
+            )
+            
+            context.res.status_code = 403
+            return context.res.json({
+                'success': False,
+                'error': error_msg,
+                'needsUpgrade': True
+            })
+        
+        context.log(f"[题目生成触发器] 会员验证通过")
+        
+        # 验证任务数据
         task_type = task.get('type', 'variant')
         source_question_ids = task.get('sourceQuestionIds', [])
         variants_per_question = task.get('variantsPerQuestion', 1)
-        
-        if not user_id:
-            raise ValueError('缺少 userId')
         
         if not source_question_ids or len(source_question_ids) == 0:
             raise ValueError('sourceQuestionIds 不能为空')
@@ -160,18 +222,20 @@ def main(context):
                 }
             )
             
+            context.res.status_code = 500
             return context.res.json({
                 'success': False,
                 'error': error_msg
-            }, status=500)
+            })
         
     except AppwriteException as e:
         error_msg = f"Appwrite 错误: {str(e)}"
         context.error(error_msg)
+        context.res.status_code = 500
         return context.res.json({
             'success': False,
             'error': error_msg
-        }, status=500)
+        })
         
     except ValueError as e:
         error_msg = f"数据验证失败: {str(e)}"
@@ -192,16 +256,18 @@ def main(context):
         except:
             pass
         
+        context.res.status_code = 400
         return context.res.json({
             'success': False,
             'error': error_msg
-        }, status=400)
+        })
         
     except Exception as e:
         error_msg = f"未知错误: {str(e)}"
         context.error(error_msg)
+        context.res.status_code = 500
         return context.res.json({
             'success': False,
             'error': error_msg
-        }, status=500)
+        })
 

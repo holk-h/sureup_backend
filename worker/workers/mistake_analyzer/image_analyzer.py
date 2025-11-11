@@ -599,23 +599,32 @@ async def analyze_with_llm_vision(
 
 
 async def extract_question_content(
-    image_base64: str,
+    image_base64: [str, List[str]],
     user_feedback: Optional[str] = None,
     previous_result: Optional[Dict] = None
 ) -> Dict:
     """
     第一步：OCR 提取题目内容和学科识别（内部函数，异步）
     
+    支持单图和多图（跨页题目）
+    
     使用分段标记格式，避免 LaTeX 转义地狱
     
     Args:
-        image_base64: 纯 base64 字符串（不含前缀）
+        image_base64: 纯 base64 字符串或字符串列表（不含前缀）
+                     - 单图：str
+                     - 多图：List[str]（按页面顺序）
         user_feedback: 用户反馈的错误原因（可选）
         previous_result: 上次识别的结果（可选），包含 content, type, options, subject
         
     Returns:
         {'content': str, 'type': str, 'options': list, 'subject': str}
     """
+    # 统一处理为列表格式
+    if isinstance(image_base64, str):
+        image_base64_list = [image_base64]
+    else:
+        image_base64_list = image_base64
     system_prompt = """你是专业的题目 OCR 识别专家，精确提取题目文字并识别学科。
 
 **核心要求：**
@@ -670,9 +679,20 @@ async def extract_question_content(
 
 """
     
-    user_prompt = rf"""请识别这张题目图片，提取信息。
+    # 构建多图提示
+    multi_image_hint = ""
+    if len(image_base64_list) > 1:
+        multi_image_hint = f"""
+**重要提示：这是一道跨页题目，共 {len(image_base64_list)} 张图片！**
+- 图片按顺序展示了题目的不同部分（可能是题目、图表、选项分布在不同页）
+- 请综合所有图片的内容，整合为一道完整的题目
+- 所有页面的内容都属于同一道题，请完整提取
 
-**要提取的内容：**
+"""
+    
+    user_prompt = rf"""请识别{'这道跨页题目（共 ' + str(len(image_base64_list)) + ' 张图片）' if len(image_base64_list) > 1 else '这张题目图片'}，提取信息。
+
+{multi_image_hint}**要提取的内容：**
 1. **题目内容**：转换为 Markdown + LaTeX 格式
    - 所有公式用 LaTeX：变量、表达式、方程式等
    - 行内公式：\( ... \)
@@ -758,6 +778,25 @@ math
 
 ##END##
 
+**示例4 - 选择题（化学）：**
+
+##TYPE##
+choice
+
+##SUBJECT##
+chemistry
+
+##CONTENT##
+下列转化中，能一步实现的是（）
+
+##OPTIONS##
+A. \( \text{{Na}} \rightarrow \text{{Na}}_2\text{{O}}_2 \)
+B. \( \text{{Cl}}_2 \rightarrow \text{{FeCl}}_3 \)
+C. \( \text{{SO}}_3 \rightarrow \text{{Na}}_2\text{{SO}}_4 \)
+D. \( \text{{Fe}}_2\text{{O}}_3 \rightarrow \text{{Fe(OH)}}_3 \)
+
+##END##
+
 **LaTeX 常用语法：**
 - 分数：\frac{{a}}{{b}}
 - 上标：x^2, x^{{n+1}}
@@ -768,22 +807,29 @@ math
 - 希腊字母：\alpha, \beta, \theta, \pi
 - 运算符：\times, \div, \pm, \leq, \geq
 - 矩阵：\begin{{bmatrix}} ... \end{{bmatrix}}
+- **化学式**（重要！）：使用 \text{{}} 包裹化学元素和化合物
+  * 单质：\text{{Na}}, \text{{Cl}}_2
+  * 化合物：\text{{Na}}_2\text{{O}}_2, \text{{FeCl}}_3, \text{{Na}}_2\text{{SO}}_4
+  * 带括号：\text{{Fe(OH)}}_3, \text{{Ca(NO}}_3\text{{)}}_2
+  * 反应箭头：\rightarrow, \leftarrow, \rightleftharpoons
 
 **重要：**
 - 标记符号必须独占一行
 - 行内公式用 \( ... \)，块级公式用 \[ ... \]
 - LaTeX 公式直接书写，不需要转义反斜杠
+- **化学式必须用 \text{{}} 包裹**，确保化学元素符号正确显示
 - OPTIONS 部分如果是非选择题，留空即可
 
 {user_feedback_section}"""
 
     response = None
     try:
+        print(f"开始OCR识别，共 {len(image_base64_list)} 张图片")
         print(f"user_prompt: {user_prompt}")
         llm = get_llm_provider()
         response = await llm.chat_with_vision(
             prompt=user_prompt,
-            image_base64=image_base64,
+            image_base64=image_base64_list,  # 传递图片列表
             system_prompt=system_prompt,
             temperature=0.7,
             max_tokens=32768,

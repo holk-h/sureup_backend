@@ -6,12 +6,16 @@ Event Trigger:
 - databases.*.collections.mistake_records.documents.*.create
 - databases.*.collections.mistake_records.documents.*.update
 
+新设计：一条错题记录 = 一道题 = 一张或多张图片（支持跨页题目）
+
 新的工作流程:
-1. Flutter 端上传图片到 bucket，为每张图片创建一个 mistake_record (analysisStatus: "pending")
+1. Flutter 端上传图片到 bucket，为每道题创建一个 mistake_record (analysisStatus: "pending")
+   - 单图题：originalImageIds: ["image_id_1"]
+   - 多图题：originalImageIds: ["image_id_1", "image_id_2", "image_id_3"]
 2. 本 function 被自动触发（create 事件）
 3. 验证任务并入队到 Worker 系统
 4. 立即返回（不等待处理）
-5. Worker 异步执行实际的分析任务
+5. Worker 异步执行实际的分析任务（支持多图）
 6. Worker 更新 analysisStatus 为 "completed" 或 "failed"
 7. Flutter 端通过 Realtime API 订阅更新，实时显示分析结果
 
@@ -20,6 +24,7 @@ Event Trigger:
 - 不受 Appwrite Function 单 worker 限制
 - 长时间 LLM 调用不会阻塞
 - 更好的错误处理和重试机制
+- 支持单图和多图题目（跨页题目）
 """
 import os
 import json
@@ -128,23 +133,28 @@ def main(context):
         
         # 验证必要字段
         record_id = record_data.get('$id')
-        original_image_id = record_data.get('originalImageId')
+        original_image_ids = record_data.get('originalImageIds', [])
         
         if not record_id:
             context.error("错题记录缺少ID")
             return context.res.empty()
             
-        if not original_image_id:
+        if not original_image_ids or len(original_image_ids) == 0:
             context.error(f"错题记录 {record_id} 缺少图片ID")
             return context.res.empty()
+        
+        # 记录图片数量
+        image_count = len(original_image_ids)
+        is_multi_photo = image_count > 1
+        context.log(f"📸 准备分析: record_id={record_id}, 图片数={image_count}, 多图题={is_multi_photo}")
         
         # 将任务入队到 Worker 系统
         result = enqueue_analysis_task(record_data)
         
         if result['success']:
-            context.log(f"✅ 任务入队成功: record_id={record_id}, task_id={result.get('task_id')}")
+            context.log(f"✅ 任务入队成功: record_id={record_id}, task_id={result.get('task_id')}, 图片数={image_count}")
         else:
-            context.error(f"❌ 任务入队失败: record_id={record_id}, error={result.get('error')}")
+            context.error(f"❌ 任务入队失败: record_id={record_id}, 图片数={image_count}, error={result.get('error')}")
         
         # 无论成功或失败，都立即返回（不阻塞）
         # Worker 系统会异步处理任务并更新数据库

@@ -394,6 +394,89 @@
             "entrypoint": "src/main.py",
             "commands": "pip install -r requirements.txt",
             "path": "functions/mastery-score-aggregator"
+        },
+        {
+            "$id": "subscription-verify",
+            "name": "订阅验证",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
+            "schedule": "",
+            "timeout": 30,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/subscription-verify",
+            "variables": {
+                "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
+                "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
+                "APPWRITE_API_KEY": "",
+                "APPWRITE_DATABASE_ID": "main",
+                "APPLE_SHARED_SECRET": "",
+                "GOOGLE_SERVICE_ACCOUNT_JSON": ""
+            }
+        },
+        {
+            "$id": "subscription-check",
+            "name": "订阅状态检查（定时任务）",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "events": [],
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
+            "schedule": "* * * * *",
+            "timeout": 300,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/subscription-check",
+            "variables": {
+                "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
+                "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
+                "APPWRITE_API_KEY": "",
+                "APPWRITE_DATABASE_ID": "main"
+            }
+        },
+        {
+            "$id": "apple-webhook",
+            "name": "Apple 订阅 Webhook",
+            "runtime": "node-16.0",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "guests"
+            ],
+            "events": [],
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
+            "schedule": "",
+            "timeout": 30,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "path": "functions/apple-webhook",
+            "variables": {
+                "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
+                "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
+                "APPWRITE_API_KEY": "",
+                "APPWRITE_DATABASE_ID": "main",
+                "APPLE_BUNDLE_ID": "com.delvetech.sureup",
+                "APPLE_ENVIRONMENT": "Sandbox"
+            }
         }
     ],
     "tablesDB": [
@@ -694,6 +777,49 @@
                     "size": 2000,
                     "default": null,
                     "encrypt": false
+                },
+                {
+                    "key": "subscriptionStatus",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "free",
+                    "encrypt": false
+                },
+                {
+                    "key": "subscriptionExpiryDate",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "dailyLimitsResetDate",
+                    "type": "datetime",
+                    "required": false,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "todayMistakeRecords",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 1000,
+                    "default": 0
+                },
+                {
+                    "key": "todayAccumulatedAnalysis",
+                    "type": "integer",
+                    "required": false,
+                    "array": false,
+                    "min": 0,
+                    "max": 100,
+                    "default": 0
                 }
             ],
             "indexes": [
@@ -1379,10 +1505,10 @@
                     "default": 0
                 },
                 {
-                    "key": "originalImageId",
+                    "key": "originalImageIds",
                     "type": "string",
                     "required": false,
-                    "array": false,
+                    "array": true,
                     "size": 2000,
                     "default": null,
                     "encrypt": false
@@ -2725,6 +2851,147 @@
                     "status": "available",
                     "columns": [
                         "expiresAt"
+                    ],
+                    "orders": [
+                        "ASC"
+                    ]
+                }
+            ]
+        },
+        {
+            "$id": "subscriptions",
+            "$permissions": [
+                "read(\"any\")",
+                "create(\"users\")",
+                "update(\"users\")"
+            ],
+            "databaseId": "main",
+            "name": "订阅记录",
+            "enabled": true,
+            "rowSecurity": true,
+            "columns": [
+                {
+                    "key": "userId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 36,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "platform",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 20,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "productId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 100,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "status",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 20,
+                    "default": "active",
+                    "encrypt": false
+                },
+                {
+                    "key": "transactionId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 200,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "originalTransactionId",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 200,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "purchaseDate",
+                    "type": "datetime",
+                    "required": true,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "expiryDate",
+                    "type": "datetime",
+                    "required": true,
+                    "array": false,
+                    "format": "",
+                    "default": null
+                },
+                {
+                    "key": "autoRenew",
+                    "type": "boolean",
+                    "required": false,
+                    "array": false,
+                    "default": true
+                },
+                {
+                    "key": "receiptData",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 10000,
+                    "default": null,
+                    "encrypt": true
+                }
+            ],
+            "indexes": [
+                {
+                    "key": "userId_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "userId_status_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "userId",
+                        "status"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "transactionId_unique",
+                    "type": "unique",
+                    "status": "available",
+                    "columns": [
+                        "transactionId"
+                    ],
+                    "orders": []
+                },
+                {
+                    "key": "expiryDate_idx",
+                    "type": "key",
+                    "status": "available",
+                    "columns": [
+                        "expiryDate"
                     ],
                     "orders": [
                         "ASC"
