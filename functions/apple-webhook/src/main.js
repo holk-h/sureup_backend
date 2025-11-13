@@ -137,21 +137,49 @@ async function updateSubscription(db, userId, transaction, notificationType, log
 
   log(`[DB] 更新订阅:`, JSON.stringify(sub, null, 2));
 
-  // 查订阅记录
+  // 🔍 先检查此 transactionId 是否已存在（防止并发重复处理）
+  const existingByTxn = await db.listDocuments(DB_ID, COL_SUBSCRIPTIONS, [
+    Query.equal('transactionId', sub.transactionId),
+    Query.limit(1)
+  ]);
+
+  if (existingByTxn.total > 0) {
+    log('[DB] ⚠️ transactionId 已存在，可能是重复通知，跳过更新');
+    // 仍然更新 profile（确保一致性）
+    await updateProfile(db, userId, sub, log);
+    return;
+  }
+
+  // 查订阅记录（通过 originalTransactionId）
   const existing = await db.listDocuments(DB_ID, COL_SUBSCRIPTIONS, [
     Query.equal('originalTransactionId', sub.originalTransactionId),
     Query.limit(1)
   ]);
 
-  if (existing.total > 0) {
-    await db.updateDocument(DB_ID, COL_SUBSCRIPTIONS, existing.documents[0].$id, sub);
-    log('[DB] ✅ 已更新订阅记录');
-  } else {
-    await db.createDocument(DB_ID, COL_SUBSCRIPTIONS, ID.unique(), sub);
-    log('[DB] ✅ 已创建订阅记录');
+  try {
+    if (existing.total > 0) {
+      await db.updateDocument(DB_ID, COL_SUBSCRIPTIONS, existing.documents[0].$id, sub);
+      log('[DB] ✅ 已更新订阅记录');
+    } else {
+      await db.createDocument(DB_ID, COL_SUBSCRIPTIONS, ID.unique(), sub);
+      log('[DB] ✅ 已创建订阅记录');
+    }
+  } catch (err) {
+    // 🔧 处理并发导致的 unique 约束冲突
+    if (err.message && err.message.includes('already exists')) {
+      log('[DB] ⚠️ 检测到并发冲突（transactionId 已被其他请求创建），视为成功');
+      // 不抛出错误，继续更新 profile
+    } else {
+      throw err; // 其他错误继续抛出
+    }
   }
 
   // 更新 profile
+  await updateProfile(db, userId, sub, log);
+}
+
+// ✅ 更新用户 profile（抽取为独立函数）
+async function updateProfile(db, userId, sub, log) {
   const prof = await db.listDocuments(DB_ID, COL_PROFILES, [
     Query.equal('userId', userId),
     Query.limit(1)

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 from appwrite.services.databases import Databases
 from appwrite.query import Query
-from .timezone_utils import (
+from workers.mistake_analyzer.helpers.timezone_utils import (
     get_user_timezone_date, 
     get_user_timezone_datetime,
     get_user_timezone_iso_string,

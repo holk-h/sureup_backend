@@ -10,7 +10,7 @@ import asyncio
 from loguru import logger
 
 from workers.base import BaseWorker
-from workers.mistake_analyzer.utils import get_databases, get_storage
+from workers.mistake_analyzer.helpers.utils import get_databases, get_storage
 from workers.mistake_analyzer.main import process_mistake_analysis
 
 

@@ -24,11 +24,11 @@ from appwrite.services.databases import Databases
 from appwrite.services.storage import Storage
 from appwrite.exception import AppwriteException
 
-from workers.mistake_analyzer.image_analyzer import extract_question_content, analyze_subject_and_knowledge_points
-from workers.mistake_analyzer.question_service import create_question, get_question
-from workers.mistake_analyzer.knowledge_point_service import ensure_knowledge_point, ensure_module, add_question_to_knowledge_point
-from workers.mistake_analyzer.profile_stats_service import update_profile_stats_on_mistake_created
-from workers.mistake_analyzer.utils import get_databases, get_storage
+from workers.mistake_analyzer.core.image_analyzer import extract_question_content, analyze_subject_and_knowledge_points
+from workers.mistake_analyzer.services.question_service import create_question, get_question
+from workers.mistake_analyzer.services.knowledge_point_service import ensure_knowledge_point, ensure_module, add_question_to_knowledge_point
+from workers.mistake_analyzer.services.profile_stats_service import update_profile_stats_on_mistake_created
+from workers.mistake_analyzer.helpers.utils import get_databases, get_storage
 
 
 # Configuration

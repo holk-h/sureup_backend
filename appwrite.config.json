@@ -409,12 +409,13 @@
                 "databases.write"
             ],
             "schedule": "",
-            "timeout": 30,
+            "timeout": 90,
             "enabled": true,
             "logging": true,
             "entrypoint": "src/main.py",
             "commands": "pip install -r requirements.txt",
             "path": "functions/subscription-verify",
+            "async": true,
             "variables": {
                 "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
                 "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",

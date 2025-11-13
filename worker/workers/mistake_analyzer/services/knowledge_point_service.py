@@ -133,7 +133,7 @@ def find_module(
     """
     try:
         # 将学科英文代码转换为中文（数据库中存储的是中文）
-        from workers.mistake_analyzer.utils import get_subject_chinese_name
+        from workers.mistake_analyzer.helpers.utils import get_subject_chinese_name
         subject_chinese = get_subject_chinese_name(subject)
         
         queries = [
@@ -185,7 +185,7 @@ def ensure_module(
         找到的模块文档，如果找不到则返回"未分类"模块
     """
     # 获取用户学段信息
-    from workers.mistake_analyzer.utils import get_user_profile, get_education_level_from_grade
+    from workers.mistake_analyzer.helpers.utils import get_user_profile, get_education_level_from_grade
     
     user_profile = get_user_profile(databases, user_id)
     user_grade = user_profile.get('grade') if user_profile else None
@@ -403,7 +403,7 @@ def get_modules_by_subject(
     """
     try:
         # 将学科英文代码转换为中文（数据库中存储的是中文）
-        from workers.mistake_analyzer.utils import get_subject_chinese_name
+        from workers.mistake_analyzer.helpers.utils import get_subject_chinese_name
         subject_chinese = get_subject_chinese_name(subject)
         
         queries = [
@@ -470,31 +470,83 @@ def get_user_knowledge_points_by_subject(
     Args:
         databases: 数据库实例
         user_id: 用户ID
-        subject: 学科（中文或英文代码）
+        subject: 学科（英文代码，如 'chemistry'）
         
     Returns:
-        知识点文档列表，按模块分组
+        知识点文档列表
     """
     try:
-        # 将学科英文代码转换为中文（如果需要）
-        from workers.mistake_analyzer.utils import get_subject_chinese_name
-        subject_chinese = get_subject_chinese_name(subject)
+        # 数据库中存储的是英文 subject（如 'chemistry'），直接使用传入的 subject
+        # 如果传入的是中文，需要转换为英文（但通常传入的就是英文）
+        from workers.mistake_analyzer.helpers.utils import get_subject_chinese_name
         
-        # 获取用户在该学科下的所有知识点
+        # 数据库中存储的是英文，直接使用 subject（应该是英文代码）
+        subject_english = subject
+        
+        print(f"🔍 [DB查询] 查询用户知识点 - userId: {user_id}, subject: {subject}")
+        print(f"🔍 [DB查询] DATABASE_ID: {DATABASE_ID}, COLLECTION: {COLLECTION_USER_KP}")
+        print(f"🔍 [DB查询] 使用英文 subject 查询: {subject_english}")
+        
+        # 先尝试用英文查询（数据库中存储的是英文）
         docs = databases.list_documents(
             database_id=DATABASE_ID,
             collection_id=COLLECTION_USER_KP,
             queries=[
                 Query.equal('userId', user_id),
-                Query.equal('subject', subject_chinese),
-                Query.limit(1000)  # 增加限制以获取更多知识点
+                Query.equal('subject', subject_english),
+                Query.limit(1000)
             ]
         )
         
-        return docs.get('documents', [])
+        result = docs.get('documents', [])
+        print(f"🔍 [DB查询] 用英文查询完成，返回 {len(result)} 条记录")
+        
+        # 如果英文查询为空，尝试用中文查询（兼容旧数据）
+        if not result:
+            subject_chinese = get_subject_chinese_name(subject)
+            print(f"🔍 [DB查询] 英文查询为空，尝试用中文查询: {subject_chinese}")
+            docs = databases.list_documents(
+                database_id=DATABASE_ID,
+                collection_id=COLLECTION_USER_KP,
+                queries=[
+                    Query.equal('userId', user_id),
+                    Query.equal('subject', subject_chinese),
+                    Query.limit(1000)
+                ]
+            )
+            result = docs.get('documents', [])
+            print(f"🔍 [DB查询] 用中文查询完成，返回 {len(result)} 条记录")
+        
+        if result:
+            print(f"🔍 [DB查询] 第一条记录示例: userId={result[0].get('userId')}, subject={result[0].get('subject')}, name={result[0].get('name')}, moduleId={result[0].get('moduleId')}")
+        else:
+            print(f"⚠️ [DB查询] 查询结果为空，可能的原因:")
+            print(f"  - userId 不匹配 (查询的是: {user_id})")
+            print(f"  - subject 不匹配 (尝试了英文: {subject_english} 和中文: {get_subject_chinese_name(subject)})")
+            print(f"  - 用户确实没有该学科的知识点")
+            # 尝试查询该用户的所有知识点，看看实际存储的 subject 格式
+            try:
+                all_docs = databases.list_documents(
+                    database_id=DATABASE_ID,
+                    collection_id=COLLECTION_USER_KP,
+                    queries=[
+                        Query.equal('userId', user_id),
+                        Query.limit(10)
+                    ]
+                )
+                all_result = all_docs.get('documents', [])
+                if all_result:
+                    subjects_found = set([doc.get('subject') for doc in all_result if doc.get('subject')])
+                    print(f"🔍 [DB查询] 该用户实际存储的 subject 值: {subjects_found}")
+            except Exception as e:
+                print(f"⚠️ [DB查询] 查询用户所有知识点失败: {str(e)}")
+        
+        return result
         
     except Exception as e:
-        print(f"获取学科知识点列表失败: {str(e)}")
+        print(f"❌ [DB查询] 获取学科知识点列表失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return []
 
 

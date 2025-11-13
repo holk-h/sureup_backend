@@ -153,7 +153,8 @@ def select_variant_questions(
     kp_data: Dict[str, Any],
     count: int,
     db: Databases,
-    exclude_question_ids: set = None
+    exclude_question_ids: set = None,
+    shortage_tracker: dict = None
 ) -> List[Dict[str, Any]]:
     """
     选择变式题
@@ -167,6 +168,7 @@ def select_variant_questions(
         count: 需要选择的数量
         db: 数据库服务
         exclude_question_ids: 需要排除的题目ID集合（避免跨知识点重复）
+        shortage_tracker: 题目不足追踪器（可选）
         
     Returns:
         选中的变式题列表
@@ -197,7 +199,8 @@ def select_variant_questions(
             single_count,
             kp_data['mistakes'],
             db,
-            exclude_ids=exclude_question_ids
+            exclude_ids=exclude_question_ids,
+            shortage_tracker=shortage_tracker
         )
         selected.extend(single_questions)
     
@@ -212,7 +215,8 @@ def select_variant_questions(
             combined_count,
             kp_data['mistakes'],
             db,
-            exclude_ids=all_exclude_ids
+            exclude_ids=all_exclude_ids,
+            shortage_tracker=shortage_tracker
         )
         selected.extend(combined_questions)
     
@@ -223,7 +227,8 @@ def select_comprehensive_questions(
     kp_data: Dict[str, Any],
     count: int,
     db: Databases,
-    exclude_question_ids: set = None
+    exclude_question_ids: set = None,
+    shortage_tracker: dict = None
 ) -> List[Dict[str, Any]]:
     """
     选择综合题（mastered 阶段用）
@@ -235,11 +240,12 @@ def select_comprehensive_questions(
         count: 需要选择的数量
         db: 数据库服务
         exclude_question_ids: 需要排除的题目ID集合
+        shortage_tracker: 题目不足追踪器（可选）
         
     Returns:
         选中的综合题列表
     """
-    return select_variant_questions(kp_data, count, db, exclude_question_ids)
+    return select_variant_questions(kp_data, count, db, exclude_question_ids, shortage_tracker)
 
 
 def _select_single_kp_questions(
@@ -247,7 +253,8 @@ def _select_single_kp_questions(
     count: int,
     mistakes: List[Dict[str, Any]],
     db: Databases,
-    exclude_ids = None
+    exclude_ids = None,
+    shortage_tracker: dict = None
 ) -> List[Dict[str, Any]]:
     """
     选择单知识点题目（内部函数）
@@ -255,6 +262,7 @@ def _select_single_kp_questions(
     新增逻辑：
     - 优先选择该知识点为主要知识点的题目
     - 如果主要知识点题目不足，再选择普通关联题目
+    - 如果题目不足，记录到 shortage_tracker 以便后续生成
     
     Args:
         knowledge_point_id: 知识点ID
@@ -262,6 +270,7 @@ def _select_single_kp_questions(
         mistakes: 用户错题记录（用于排除）
         db: 数据库服务
         exclude_ids: 需要排除的题目ID（可以是list或set）
+        shortage_tracker: 题目不足追踪器（可选），用于记录需要生成变式题的源题目
         
     Returns:
         选中的题目列表
@@ -325,18 +334,120 @@ def _select_single_kp_questions(
             f"其中 {primary_count} 道为主要知识点题目"
         )
         
-        if len(selected) < count:
+        # 如果题目不足，记录到 shortage_tracker
+        shortage = count - len(selected)
+        if shortage > 0:
             logger.warning(
                 f"知识点 {knowledge_point_id} 的变式题不足，"
-                f"需要 {count} 道，实际找到 {len(selected)} 道 "
-                f"(可能因题库不足或题目去重)"
+                f"需要 {count} 道，实际找到 {len(selected)} 道，缺口 {shortage} 道"
             )
+            
+            # 记录需要生成变式题的源题目（从错题中选择）
+            if shortage_tracker is not None:
+                _record_variant_generation_need(
+                    knowledge_point_id=knowledge_point_id,
+                    mistakes=mistakes,
+                    shortage=shortage,
+                    shortage_tracker=shortage_tracker,
+                    db=db
+                )
         
         return selected
         
     except Exception as e:
         logger.error(f"查询变式题失败: {e}")
         return []
+
+
+def _record_variant_generation_need(
+    knowledge_point_id: str,
+    mistakes: List[Dict[str, Any]],
+    shortage: int,
+    shortage_tracker: dict,
+    db: Databases
+):
+    """
+    记录需要生成变式题的源题目
+    
+    策略：
+    - 从用户的错题中选择最近的、高质量的题目作为源题目
+    - 每个源题目可以生成多个变式题来弥补缺口
+    
+    Args:
+        knowledge_point_id: 知识点ID
+        mistakes: 错题记录列表
+        shortage: 题目缺口数量
+        shortage_tracker: 追踪器字典
+        db: 数据库服务
+    """
+    try:
+        # 从错题中选择候选源题目
+        candidate_source_questions = []
+        
+        for mistake in mistakes:
+            question_id = mistake.get('questionId')
+            if not question_id:
+                continue
+            
+            try:
+                question = db.get_document('main', 'questions', question_id)
+                
+                # 优先选择该知识点为主要知识点的题目
+                primary_kp_ids = question.get('primaryKnowledgePointIds', [])
+                is_primary = knowledge_point_id in primary_kp_ids if primary_kp_ids else False
+                
+                # 检查题目质量（只选择高质量题目作为源题目）
+                quality_score = question.get('qualityScore', 0)
+                
+                if quality_score >= 4.0:  # 只选择质量分 >= 4.0 的题目
+                    candidate_source_questions.append({
+                        'question_id': question_id,
+                        'is_primary': is_primary,
+                        'quality_score': quality_score,
+                        'created_at': mistake.get('$createdAt', '')
+                    })
+            except Exception as e:
+                logger.warning(f"获取源题目失败: {question_id}, 错误: {e}")
+                continue
+        
+        if not candidate_source_questions:
+            logger.warning(f"知识点 {knowledge_point_id} 没有合适的源题目用于生成变式题")
+            return
+        
+        # 排序：主要知识点题目优先，然后按质量分和时间
+        candidate_source_questions.sort(
+            key=lambda x: (x['is_primary'], x['quality_score'], x['created_at']),
+            reverse=True
+        )
+        
+        # 选择前几个源题目（每个源题目生成 2-3 道变式题）
+        variants_per_question = 3
+        num_source_questions = min(
+            len(candidate_source_questions),
+            (shortage + variants_per_question - 1) // variants_per_question  # 向上取整
+        )
+        
+        selected_sources = candidate_source_questions[:num_source_questions]
+        
+        # 记录到 shortage_tracker
+        for source in selected_sources:
+            question_id = source['question_id']
+            if question_id not in shortage_tracker:
+                shortage_tracker[question_id] = {
+                    'knowledge_point_id': knowledge_point_id,
+                    'variants_needed': min(variants_per_question, shortage)
+                }
+                shortage -= variants_per_question
+                if shortage <= 0:
+                    break
+        
+        logger.info(
+            f"记录变式题生成需求：知识点 {knowledge_point_id}，"
+            f"选择了 {len([s for s in selected_sources if s['question_id'] in shortage_tracker])} 个源题目"
+        )
+        
+    except Exception as e:
+        logger.error(f"记录变式题生成需求失败: {e}")
 
 
 def check_if_all_correct_last_time(mistakes: List[Dict[str, Any]]) -> bool:

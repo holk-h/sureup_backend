@@ -145,6 +145,17 @@ curl -X POST https://api.delvetech.cn/v1/functions/apple-webhook/executions \
 
 如果用户还没通过应用验证购买，Webhook 会记录日志但不会报错。
 
+### Q: "Document with the requested ID already exists" 错误？
+
+**A:** 这个偶现错误已修复！原因是：
+1. Apple 可能在短时间内发送多个相同的通知（网络重试或系统重发）
+2. 两个并发请求同时更新同一个 `transactionId`（unique 索引冲突）
+
+**修复机制**：
+- ✅ 检测重复的 `transactionId`，自动跳过已处理的通知
+- ✅ 捕获并发冲突异常，视为成功处理
+- ✅ 确保 profile 状态始终与最新订阅保持一致
+
 ## 参考文档
 
 - [App Store Server Notifications](https://developer.apple.com/documentation/appstoreservernotifications)
@@ -157,6 +168,7 @@ curl -X POST https://api.delvetech.cn/v1/functions/apple-webhook/executions \
 - ✅ 使用 Apple 官方的根证书验证
 - ✅ 检查 Bundle ID 和环境匹配
 - ✅ 防止重放攻击（transactionId 唯一性）
+- ✅ 防止并发冲突（重复通知自动去重）
 
 ## 生产环境注意事项
 

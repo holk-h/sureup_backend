@@ -8,6 +8,7 @@ from typing import Dict, Any, List
 from loguru import logger
 from appwrite.services.databases import Databases
 from appwrite.query import Query
+from appwrite.id import ID
 
 from .priority_calculator import calculate_priority
 from .question_selector import (
@@ -188,8 +189,9 @@ def select_knowledge_points(
 def generate_task_items(
     selected_kps: List[Dict[str, Any]],
     difficulty: str,
-    db: Databases
-) -> List[Dict[str, Any]]:
+    db: Databases,
+    user_id: str = None
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     为选中的知识点生成任务项
     
@@ -198,17 +200,22 @@ def generate_task_items(
     - 然后按题目ID分组，合并重复的题目
     - 一道题如果对应多个知识点，创建一个任务项关联所有知识点
     - 这样避免因去重导致某些知识点没有题目
+    - 如果变式题不足，记录到 shortage_tracker 以便后续生成
     
     Args:
         selected_kps: 选中的知识点列表
         difficulty: 难度设置
         db: 数据库服务
+        user_id: 用户ID（用于记录变式题生成需求）
         
     Returns:
-        任务项列表（每项可能关联多个知识点）
+        (任务项列表, shortage_tracker字典)
+        - 任务项列表：每项可能关联多个知识点
+        - shortage_tracker：记录需要生成变式题的源题目
     """
     # 第一步：为每个知识点独立选题
     kp_question_map = {}  # {kp_id: {'questions': [...], 'kp_data': {...}}}
+    shortage_tracker = {}  # 记录需要生成变式题的源题目
     
     for kp_data in selected_kps:
         rs = kp_data['review_state']
@@ -246,7 +253,8 @@ def generate_task_items(
                 kp_data,
                 estimate_question_count(status, difficulty) - len(original_questions),
                 db,
-                exclude_question_ids=None  # 不排除重复
+                exclude_question_ids=None,  # 不排除重复
+                shortage_tracker=shortage_tracker  # 传入 shortage_tracker
             )
             
         elif status == 'mastered':
@@ -255,7 +263,8 @@ def generate_task_items(
                 kp_data,
                 estimate_question_count(status, difficulty),
                 db,
-                exclude_question_ids=None  # 不排除重复
+                exclude_question_ids=None,  # 不排除重复
+                shortage_tracker=shortage_tracker  # 传入 shortage_tracker
             )
         
         # 保存该知识点的题目
@@ -330,7 +339,13 @@ def generate_task_items(
         f"覆盖 {len(selected_kps)} 个知识点"
     )
     
-    return task_items
+    # 如果有题目不足的情况，记录日志
+    if shortage_tracker:
+        logger.info(
+            f"检测到 {len(shortage_tracker)} 个源题目需要生成变式题"
+        )
+    
+    return task_items, shortage_tracker
 
 
 def generate_ai_message(kp_data: Dict[str, Any]) -> str:
@@ -346,6 +361,117 @@ def generate_ai_message(kp_data: Dict[str, Any]) -> str:
     # MVP阶段简化，暂不实现
     # 未来可以从 learning_memories 查询用户弱点，生成个性化提示
     return ""
+
+
+def trigger_variant_generation(
+    user_id: str,
+    shortage_tracker: Dict[str, Any],
+    db: Databases
+):
+    """
+    异步触发变式题生成
+    
+    策略：
+    - 直接创建 question_generation_tasks 记录
+    - Appwrite Event 会自动触发 trigger function
+    - Trigger function 会调用 Worker 进行实际生成
+    - 生成的新题下次任务生成时可用
+    
+    Args:
+        user_id: 用户ID
+        shortage_tracker: 题目不足追踪器，格式：{question_id: {knowledge_point_id, variants_needed}}
+        db: 数据库服务
+    """
+    if not shortage_tracker:
+        return
+    
+    try:
+        # 检查用户是否为会员（只有会员才能生成变式题）
+        profiles = db.list_documents(
+            'main',
+            'profiles',
+            queries=[
+                Query.equal('userId', user_id),
+                Query.limit(1)
+            ]
+        )
+        
+        if not profiles['documents']:
+            logger.warning(f"用户 {user_id} 档案不存在，跳过变式题生成")
+            return
+        
+        profile = profiles['documents'][0]
+        subscription_status = profile.get('subscriptionStatus', 'free')
+        
+        # 只有活跃会员才触发生成
+        if subscription_status != 'active':
+            logger.info(f"用户 {user_id} 非会员，跳过变式题生成")
+            return
+        
+        # 检查会员是否过期
+        expiry_date = profile.get('subscriptionExpiryDate')
+        if expiry_date:
+            from datetime import timezone
+            expiry_datetime = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+            if expiry_datetime <= datetime.now(timezone.utc):
+                logger.info(f"用户 {user_id} 会员已过期，跳过变式题生成")
+                return
+        
+        # 批量创建变式题生成任务
+        # 策略：将多个源题目合并为一个任务，减少数据库操作
+        source_question_ids = list(shortage_tracker.keys())
+        
+        # 限制每个任务最多处理10个源题目（避免单个任务太大）
+        batch_size = 10
+        for i in range(0, len(source_question_ids), batch_size):
+            batch_ids = source_question_ids[i:i + batch_size]
+            
+            # 计算总题目数（每个源题目生成的变式数）
+            total_variants = sum(
+                shortage_tracker[qid]['variants_needed'] 
+                for qid in batch_ids
+            )
+            
+            # 使用统一的 variants_per_question（取平均值）
+            avg_variants = max(1, total_variants // len(batch_ids))
+            
+            # 创建任务记录
+            task_data = {
+                'userId': user_id,
+                'type': 'variant',
+                'status': 'pending',
+                'sourceQuestionIds': batch_ids,
+                'variantsPerQuestion': avg_variants,
+                'totalCount': len(batch_ids) * avg_variants,
+                'completedCount': 0,
+                'generatedQuestionIds': []
+            }
+            
+            try:
+                task = db.create_document(
+                    'main',
+                    'question_generation_tasks',
+                    ID.unique(),
+                    task_data
+                )
+                
+                logger.info(
+                    f"✓ 为用户 {user_id} 创建变式题生成任务: {task['$id']}, "
+                    f"源题目数: {len(batch_ids)}, 预计生成: {len(batch_ids) * avg_variants} 题"
+                )
+            except Exception as e:
+                logger.error(f"创建变式题生成任务失败: {e}")
+                # 继续处理下一批
+                continue
+        
+        logger.info(
+            f"成功为用户 {user_id} 触发变式题生成，"
+            f"总源题目数: {len(source_question_ids)}"
+        )
+        
+    except Exception as e:
+        logger.error(f"触发变式题生成异常: {e}")
+        # 不抛出异常，避免影响主流程
 
 
 def generate_daily_task_for_user(
@@ -456,7 +582,7 @@ def generate_daily_task_for_user(
         }
     
     # 5. 生成任务项
-    task_items = generate_task_items(selected_kps, difficulty, db)
+    task_items, shortage_tracker = generate_task_items(selected_kps, difficulty, db, user_id)
     
     if not task_items:
         return {
@@ -512,6 +638,14 @@ def generate_daily_task_for_user(
     #   - 限制未完成任务数量（最多2个，第 435-449 行）
     #   - 每天只生成一次（第 451-463 行）
     #   - 清理超过7天的过期任务（第 412-430 行）
+    
+    # 10. 异步触发变式题生成（如果有需要）
+    if shortage_tracker:
+        try:
+            trigger_variant_generation(user_id, shortage_tracker, db)
+        except Exception as e:
+            # 变式题生成失败不影响主流程
+            logger.warning(f"触发变式题生成失败（不影响任务生成）: {e}")
     
     return {
         'generated': True,
