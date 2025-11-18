@@ -21,6 +21,7 @@ from workers.mistake_analyzer import MistakeAnalyzerWorker
 from workers.daily_task_generator import DailyTaskGeneratorWorker
 from workers.accumulated_mistakes_analyzer import AccumulatedMistakesAnalyzerWorker
 from workers.question_generator import QuestionGeneratorWorker
+from workers.question_cropper import QuestionCropperWorker
 
 
 # ========== 全局变量 ==========
@@ -51,6 +52,7 @@ def register_workers():
     task_registry.register('daily_task_generator', DailyTaskGeneratorWorker)
     task_registry.register('accumulated_mistakes_analyzer', AccumulatedMistakesAnalyzerWorker)
     task_registry.register('question_generator', QuestionGeneratorWorker)
+    task_registry.register('question_cropper', QuestionCropperWorker)
     logger.info(f"已注册任务类型: {task_registry.list_task_types()}")
 
 

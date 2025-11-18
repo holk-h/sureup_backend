@@ -5,10 +5,21 @@
 import os
 import json
 import base64
-import re
+import sys
+import ast
 from appwrite.client import Client
 from appwrite.services.storage import Storage
+
+# 添加当前目录到 Python 路径，确保可以导入同目录下的模块
+sys.path.insert(0, os.path.dirname(__file__))
+
+# 尝试导入 LLM provider（需要根据实际路径调整）
+try:
+    from .llm_provider import get_llm_provider
+except ImportError:
+    # 如果相对导入失败，尝试从当前目录导入
 from llm_provider import get_llm_provider
+
 from utils import success_response, error_response, parse_request_body
 
 
@@ -39,31 +50,36 @@ def download_image_from_storage(storage: Storage, file_id: str) -> bytes:
 
 def parse_questions_from_response(response: str) -> list:
     """从LLM响应中解析题目列表"""
-    # 尝试提取JSON数组
-    # 匹配类似 ['第一题', '第二题', '第三题(1)'] 的格式
-    json_match = re.search(r'\[.*?\]', response, re.DOTALL)
-    if json_match:
+    if not response or not response.strip():
+        return []
+    
+    # 清理响应，移除可能的 Markdown 代码块标记
+    cleaned_response = response.strip()
+    # 移除可能的 ```json 或 ``` 标记
+    if cleaned_response.startswith('```'):
+        lines = cleaned_response.split('\n')
+        cleaned_response = '\n'.join(lines[1:-1]) if len(lines) > 2 else cleaned_response
+        cleaned_response = cleaned_response.strip()
+    
+    # 先尝试解析JSON（双引号格式）
         try:
-            questions = json.loads(json_match.group())
+        questions = json.loads(cleaned_response)
+        if isinstance(questions, list):
+            result = [str(q).strip() for q in questions if q]
+            print(f"JSON解析成功，得到 {len(result)} 个题目: {result}")
+            return result
+    except json.JSONDecodeError:
+        # JSON解析失败，尝试使用 ast.literal_eval 解析Python字面量（单引号格式）
+        try:
+            questions = ast.literal_eval(cleaned_response)
             if isinstance(questions, list):
-                return [str(q) for q in questions if q]
-        except json.JSONDecodeError:
-            pass
+                result = [str(q).strip() for q in questions if q]
+                print(f"Python字面量解析成功，得到 {len(result)} 个题目: {result}")
+                return result
+        except (ValueError, SyntaxError) as e:
+            print(f"解析失败: {e}, 响应内容: {cleaned_response[:200]}")
     
-    # 如果JSON解析失败，尝试提取题号文本
-    # 匹配 "第一题"、"第二题"、"第三题(1)" 等格式
-    question_pattern = r'["\']?第[一二三四五六七八九十\d]+题[\(（]?[\d\)）]?["\']?'
-    matches = re.findall(question_pattern, response)
-    if matches:
-        # 清理匹配结果
-        questions = []
-        for match in matches:
-            cleaned = match.strip('"\'')
-            if cleaned not in questions:
-                questions.append(cleaned)
-        return questions
-    
-    # 如果都失败，返回空列表
+    # 如果解析失败，返回空列表
     return []
 
 
@@ -89,7 +105,7 @@ def detect_questions(image_file_id: str) -> dict:
         response = provider.chat_with_vision(
             prompt=prompt,
             image_base64=image_base64_with_prefix,
-            temperature=0.3,  # 降低温度以提高准确性
+            temperature=0.6,  # 降低温度以提高准确性
         )
         
         print(f"LLM响应: {response}")

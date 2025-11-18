@@ -228,12 +228,13 @@ class DoubaoProvider(LLMProvider):
                     "image_url": {"url": image_url}
                 })
             elif image_base64:
-                # 确保有正确的前缀
-                if not image_base64.startswith('data:'):
-                    image_base64 = f"data:image/jpeg;base64,{image_base64}"
+                # 确保有正确的前缀（使用局部变量避免作用域问题）
+                image_data = image_base64
+                if not image_data.startswith('data:'):
+                    image_data = f"data:image/jpeg;base64,{image_data}"
                 content.append({
                     "type": "image_url",
-                    "image_url": {"url": image_base64}
+                    "image_url": {"url": image_data}
                 })
             
             messages.append({"role": "user", "content": content})
@@ -356,12 +357,13 @@ class ChatGPTProvider(LLMProvider):
                     "image_url": {"url": image_url}
                 })
             elif image_base64:
-                # 确保有正确的前缀
-                if not image_base64.startswith('data:'):
-                    image_base64 = f"data:image/jpeg;base64,{image_base64}"
+                # 确保有正确的前缀（使用局部变量避免作用域问题）
+                image_data = image_base64
+                if not image_data.startswith('data:'):
+                    image_data = f"data:image/jpeg;base64,{image_data}"
                 content.append({
                     "type": "image_url",
-                    "image_url": {"url": image_base64}
+                    "image_url": {"url": image_data}
                 })
             
             messages.append({"role": "user", "content": content})
