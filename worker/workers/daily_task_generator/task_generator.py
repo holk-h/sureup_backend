@@ -523,7 +523,8 @@ def generate_daily_task_for_user(
     except Exception as e:
         logger.warning(f"清理过期任务失败: {e}")
     
-    # 2. 检查是否有过多的未完成任务（限制为最多2个）
+    # 2. 检查未完成任务，但不完全阻止新任务生成
+    # 策略：如果有太多旧的未完成任务，清理掉最旧的，确保用户始终能获得新任务
     try:
         uncompleted_response = db.list_documents(
             'main',
@@ -536,15 +537,30 @@ def generate_daily_task_for_user(
             ]
         )
         
-        uncompleted_count = len(uncompleted_response['documents'])
+        uncompleted_tasks = uncompleted_response['documents']
+        uncompleted_count = len(uncompleted_tasks)
         
-        if uncompleted_count >= 2:
-            logger.info(f"用户 {user_id} 已有 {uncompleted_count} 个未完成任务，暂不生成新任务")
-            return {
-                'generated': False,
-                'reason': f'已有 {uncompleted_count} 个未完成任务，请先完成现有任务',
-                'total_questions': 0
-            }
+        # 如果有超过2个未完成任务，删除最旧的几个，只保留最近2个
+        # 这样确保用户始终能获得新任务，而不会因为历史遗留问题被永久阻止
+        if uncompleted_count >= 3:
+            # 按日期排序（最旧的在后面）
+            tasks_to_keep = 2
+            tasks_to_delete = uncompleted_tasks[tasks_to_keep:]
+            
+            for task in tasks_to_delete:
+                try:
+                    db.delete_document('main', 'daily_tasks', task['$id'])
+                    logger.info(
+                        f"清理旧的未完成任务: {task['$id']} "
+                        f"(日期: {task.get('taskDate')}, 共 {task.get('totalQuestions', 0)} 题)"
+                    )
+                except Exception as del_e:
+                    logger.warning(f"删除旧任务失败: {del_e}")
+            
+            logger.info(
+                f"用户 {user_id} 有 {uncompleted_count} 个未完成任务，"
+                f"已清理 {len(tasks_to_delete)} 个旧任务，保留最近 {tasks_to_keep} 个"
+            )
             
     except Exception as e:
         logger.warning(f"检查未完成任务数量失败: {e}")
@@ -635,9 +651,9 @@ def generate_daily_task_for_user(
     # 9. nextReviewDate 由前端在用户完成任务并提交反馈后更新
     # 任务生成器只负责查询到期的知识点和生成任务
     # 通过以下机制控制任务生成：
-    #   - 限制未完成任务数量（最多2个，第 435-449 行）
-    #   - 每天只生成一次（第 451-463 行）
-    #   - 清理超过7天的过期任务（第 412-430 行）
+    #   - 自动清理多余的未完成任务（保留最近2个）
+    #   - 每天只生成一次（避免重复）
+    #   - 清理超过7天的过期任务
     
     # 10. 异步触发变式题生成（如果有需要）
     if shortage_tracker:

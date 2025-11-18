@@ -32,7 +32,7 @@ def get_llm_provider():
     mistake_analyzer_path = Path(__file__).parent.parent / 'mistake_analyzer'
     sys.path.insert(0, str(mistake_analyzer_path))
     
-    from llm_provider import get_llm_provider as _get_llm_provider
+    from core.llm_provider import get_llm_provider as _get_llm_provider
     return _get_llm_provider()
 
 
@@ -583,6 +583,7 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
 
 （继续详细分析...）
 
+加油！我相信你！
 ---
 
 **撰写要求**：
@@ -593,7 +594,8 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
 - 适度使用 emoji 增加亲和力
 - 确保学生看完能有实质收获
 
-直接输出 Markdown 内容，不要添加任何说明或前缀，结尾不要有任何的说明、落款、签名等，直接以一句鼓励语结束就可以了。"""
+直接输出 Markdown 内容，不要添加任何说明或前缀。
+结尾不要有任何的括号、说明、落款、签名等，直接以一句鼓励语结束就可以了。"""
         
         return prompt
     

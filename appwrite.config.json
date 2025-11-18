@@ -88,6 +88,47 @@
             "path": "functions/mistake-analyzer"
         },
         {
+            "$id": "question-detector",
+            "name": "题目检测器",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [
+                "files.read"
+            ],
+            "schedule": "",
+            "timeout": 30,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/question-detector"
+        },
+        {
+            "$id": "question-cropper",
+            "name": "题目裁剪器",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [
+                "files.read",
+                "files.write"
+            ],
+            "schedule": "",
+            "timeout": 45,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/question-cropper"
+        },
+        {
             "$id": "stats-updater",
             "name": "统计更新器 (L1)",
             "runtime": "python-3.9",
@@ -478,6 +519,35 @@
                 "APPLE_BUNDLE_ID": "com.delvetech.sureup",
                 "APPLE_ENVIRONMENT": "Sandbox"
             }
+        },
+        {
+            "$id": "account-delete",
+            "name": "账户删除",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [
+                "users.read",
+                "users.write",
+                "databases.read",
+                "databases.write"
+            ],
+            "schedule": "",
+            "timeout": 60,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/account-delete",
+            "variables": {
+                "APPWRITE_ENDPOINT": "https://api.delvetech.cn/v1",
+                "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
+                "APPWRITE_API_KEY": "",
+                "APPWRITE_DATABASE_ID": "main"
+            }
         }
     ],
     "tablesDB": [
@@ -678,15 +748,6 @@
                     "encrypt": false
                 },
                 {
-                    "key": "weeklyReviewData",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 2000,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
                     "key": "lastReviewAt",
                     "type": "datetime",
                     "required": false,
@@ -771,12 +832,21 @@
                     "encrypt": false
                 },
                 {
-                    "key": "subjectMasteryScores",
+                    "key": "weeklyReviewData",
                     "type": "string",
                     "required": false,
                     "array": false,
                     "size": 2000,
                     "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "subjectMasteryScores",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 2000,
+                    "default": "",
                     "encrypt": false
                 },
                 {
@@ -821,6 +891,15 @@
                     "min": 0,
                     "max": 100,
                     "default": 0
+                },
+                {
+                    "key": "backgroundTheme",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 10,
+                    "default": null,
+                    "encrypt": false
                 }
             ],
             "indexes": [
@@ -959,7 +1038,7 @@
                     "array": false,
                     "min": 0,
                     "max": 100,
-                    "default": null
+                    "default": 0
                 }
             ],
             "indexes": [
@@ -1444,15 +1523,6 @@
                     "encrypt": false
                 },
                 {
-                    "key": "wrongReason",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 1000,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
                     "key": "analyzedAt",
                     "type": "datetime",
                     "required": false,
@@ -1506,15 +1576,6 @@
                     "default": 0
                 },
                 {
-                    "key": "originalImageIds",
-                    "type": "string",
-                    "required": false,
-                    "array": true,
-                    "size": 2000,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
                     "key": "lastReviewAt",
                     "type": "datetime",
                     "required": false,
@@ -1538,12 +1599,30 @@
                     "default": false
                 },
                 {
+                    "key": "wrongReason",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 1000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
                     "key": "accumulatedAnalyzedAt",
                     "type": "datetime",
                     "required": false,
                     "array": false,
                     "format": "",
                     "default": null
+                },
+                {
+                    "key": "originalImageIds",
+                    "type": "string",
+                    "required": false,
+                    "array": true,
+                    "size": 2000,
+                    "default": null,
+                    "encrypt": false
                 }
             ],
             "indexes": [
@@ -2221,15 +2300,6 @@
                     "encrypt": false
                 },
                 {
-                    "key": "knowledgePointId",
-                    "type": "string",
-                    "required": true,
-                    "array": false,
-                    "size": 128,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
                     "key": "status",
                     "type": "string",
                     "required": false,
@@ -2314,19 +2384,18 @@
                     "required": false,
                     "array": false,
                     "default": true
+                },
+                {
+                    "key": "knowledgePointId",
+                    "type": "string",
+                    "required": true,
+                    "array": false,
+                    "size": 128,
+                    "default": null,
+                    "encrypt": false
                 }
             ],
             "indexes": [
-                {
-                    "key": "userId_knowledgePointId_unique",
-                    "type": "unique",
-                    "status": "available",
-                    "columns": [
-                        "userId",
-                        "knowledgePointId"
-                    ],
-                    "orders": []
-                },
                 {
                     "key": "userId_nextReviewDate_idx",
                     "type": "key",
@@ -2396,7 +2465,8 @@
         {
             "$id": "daily_tasks",
             "$permissions": [
-                "read(\"any\")"
+                "read(\"any\")",
+                "update(\"users\")"
             ],
             "databaseId": "main",
             "name": "每日任务",
@@ -2999,6 +3069,37 @@
                     ]
                 }
             ]
+        },
+        {
+            "$id": "dev_msg",
+            "$permissions": [
+                "read(\"any\")"
+            ],
+            "databaseId": "main",
+            "name": "dev_msg",
+            "enabled": true,
+            "rowSecurity": false,
+            "columns": [
+                {
+                    "key": "msg",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 3000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "img",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 500,
+                    "default": null,
+                    "encrypt": false
+                }
+            ],
+            "indexes": []
         }
     ],
     "buckets": [
