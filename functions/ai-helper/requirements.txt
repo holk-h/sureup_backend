@@ -1,0 +1,5 @@
+--index-url https://mirrors.aliyun.com/pypi/simple/
+volcengine-python-sdk>=1.0.107
+httpx
+appwrite
+

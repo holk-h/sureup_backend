@@ -16,7 +16,7 @@ import base64
 import re
 import cv2
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, Optional
 from loguru import logger
 
 from appwrite.client import Client
@@ -130,9 +130,112 @@ class QuestionCropperWorker(BaseWorker):
         if not self.llm_provider:
             self.llm_provider = get_llm_provider()
     
+    async def _process_single_question(
+        self,
+        question_number: str,
+        image: np.ndarray,
+        image_base64_with_prefix: str,
+        w: int,
+        h: int,
+        task_id: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        处理单个题目的裁剪
+        
+        Args:
+            question_number: 题号
+            image: 原始图片（numpy数组）
+            image_base64_with_prefix: base64编码的图片（带前缀）
+            w: 图片宽度
+            h: 图片高度
+            task_id: 任务ID
+            
+        Returns:
+            Tuple[Optional[str], Optional[str]]: 
+                - 成功时返回 (cropped_file_id, None)
+                - 失败时返回 (None, error_message)
+        """
+        try:
+            logger.info(f"正在处理题目: {question_number}")
+            
+            # 1. 使用LLM检测bbox
+            prompt = f'请检测图像中的"{question_number}"，覆盖完全题目内容和选项，检测精准，无需识别题目内容。以<bbox>x1 y1 x2 y2</bbox>的形式表示，坐标范围为0-1000（归一化到1000*1000的比例坐标）'
+            
+            response = await self.llm_provider.chat_with_vision(
+                prompt=prompt,
+                image_base64=image_base64_with_prefix,
+                temperature=0.3,
+            )
+            
+            # 确保 response 是字符串
+            if not isinstance(response, str):
+                response = str(response)
+            
+            logger.info(f"LLM响应 ({question_number}): {response}")
+            
+            # 2. 解析bbox坐标（0-1000归一化）
+            x_min, y_min, x_max, y_max = parse_bbox_from_response(response)
+            
+            # 验证坐标范围
+            if not (0 <= x_min < x_max <= 1000 and 0 <= y_min < y_max <= 1000):
+                raise ValueError(f"bbox坐标超出范围: ({x_min}, {y_min}, {x_max}, {y_max})")
+            
+            # 3. 转换为实际像素坐标
+            x_min_real = int(x_min * w / 1000)
+            y_min_real = int(y_min * h / 1000)
+            x_max_real = int(x_max * w / 1000)
+            y_max_real = int(y_max * h / 1000)
+            
+            logger.info(f"原始bbox ({question_number}): ({x_min_real}, {y_min_real}, {x_max_real}, {y_max_real})")
+            
+            # 4. 扩大10%边距以消除误差
+            width = x_max_real - x_min_real
+            height = y_max_real - y_min_real
+            margin_x = int(width * 0.1)
+            margin_y = int(height * 0.1)
+            
+            x_min_real = max(0, x_min_real - margin_x)
+            y_min_real = max(0, y_min_real - margin_y)
+            x_max_real = min(w, x_max_real + margin_x)
+            y_max_real = min(h, y_max_real + margin_y)
+            
+            logger.info(f"扩大边距后bbox ({question_number}): ({x_min_real}, {y_min_real}, {x_max_real}, {y_max_real})")
+            
+            # 5. 裁剪图片
+            cropped_image = image[y_min_real:y_max_real, x_min_real:x_max_real]
+            
+            if cropped_image.size == 0:
+                raise ValueError("裁剪后的图片为空")
+            
+            # 6. 编码为JPEG
+            _, encoded_image = cv2.imencode('.jpg', cropped_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            cropped_bytes = encoded_image.tobytes()
+            
+            # 7. 上传裁剪后的图片到bucket
+            logger.info(f"正在上传裁剪后的图片: {question_number}")
+            cropped_file_id = ID.unique()
+            cropped_file_name = f"cropped_{question_number.replace(' ', '_')}_{cropped_file_id}.jpg"
+            
+            # 使用 bucket 的默认权限
+            await asyncio.to_thread(
+                self.storage.create_file,
+                bucket_id=ORIGIN_IMAGE_BUCKET,
+                file_id=cropped_file_id,
+                file=InputFile.from_bytes(cropped_bytes, filename=cropped_file_name),
+                permissions=['read("any")', 'update("users")', 'delete("users")']
+            )
+            
+            logger.info(f"✓ 成功上传裁剪图片 ({question_number}): {cropped_file_id}")
+            return (cropped_file_id, None)
+            
+        except Exception as e:
+            error_msg = f"{question_number}: {str(e)}"
+            logger.error(f"处理题目 '{question_number}' 失败: {str(e)}", exc_info=True)
+            return (None, error_msg)
+    
     async def process(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        处理裁剪任务（处理多个题目）
+        处理裁剪任务（处理多个题目，并行处理）
         
         Args:
             task_data: 任务数据，包含：
@@ -156,6 +259,7 @@ class QuestionCropperWorker(BaseWorker):
         
         cropped_image_ids = []
         failed_questions = []
+        progress_lock = asyncio.Lock()
         
         try:
             # 1. 更新状态为 processing
@@ -183,96 +287,54 @@ class QuestionCropperWorker(BaseWorker):
             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
             image_base64_with_prefix = f"data:image/jpeg;base64,{image_base64}"
             
-            # 5. 逐个处理每个题目
-            for idx, question_number in enumerate(question_numbers):
-                try:
-                    logger.info(f"正在处理第 {idx + 1}/{len(question_numbers)} 题: {question_number}")
+            # 5. 创建并行任务处理所有题目
+            async def process_with_progress_update(question_number: str):
+                """处理单个题目并更新进度"""
+                cropped_file_id, error_msg = await self._process_single_question(
+                    question_number=question_number,
+                    image=image,
+                    image_base64_with_prefix=image_base64_with_prefix,
+                    w=w,
+                    h=h,
+                    task_id=task_id
+                )
+                
+                # 使用锁来安全地更新共享状态
+                async with progress_lock:
+                    if cropped_file_id:
+                        cropped_image_ids.append(cropped_file_id)
+                    else:
+                        failed_questions.append(error_msg)
                     
-                    # 5.1 使用LLM检测bbox
-                    prompt = f'请检测图像中的"{question_number}"，覆盖完全题目内容和选项，检测精准，无需识别题目内容。以<bbox>x1 y1 x2 y2</bbox>的形式表示，坐标范围为0-1000（归一化到1000*1000的比例坐标）'
-                    
-                    response = await self.llm_provider.chat_with_vision(
-                        prompt=prompt,
-                        image_base64=image_base64_with_prefix,
-                        temperature=0.3,
-                    )
-                    
-                    # 确保 response 是字符串
-                    if not isinstance(response, str):
-                        response = str(response)
-                    
-                    logger.info(f"LLM响应: {response}")
-                    
-                    # 5.2 解析bbox坐标（0-1000归一化）
-                    x_min, y_min, x_max, y_max = parse_bbox_from_response(response)
-                    
-                    # 验证坐标范围
-                    if not (0 <= x_min < x_max <= 1000 and 0 <= y_min < y_max <= 1000):
-                        raise ValueError(f"bbox坐标超出范围: ({x_min}, {y_min}, {x_max}, {y_max})")
-                    
-                    # 5.3 转换为实际像素坐标
-                    x_min_real = int(x_min * w / 1000)
-                    y_min_real = int(y_min * h / 1000)
-                    x_max_real = int(x_max * w / 1000)
-                    y_max_real = int(y_max * h / 1000)
-                    
-                    logger.info(f"原始bbox: ({x_min_real}, {y_min_real}, {x_max_real}, {y_max_real})")
-                    
-                    # 5.4 扩大10%边距以消除误差
-                    width = x_max_real - x_min_real
-                    height = y_max_real - y_min_real
-                    margin_x = int(width * 0.1)
-                    margin_y = int(height * 0.1)
-                    
-                    x_min_real = max(0, x_min_real - margin_x)
-                    y_min_real = max(0, y_min_real - margin_y)
-                    x_max_real = min(w, x_max_real + margin_x)
-                    y_max_real = min(h, y_max_real + margin_y)
-                    
-                    logger.info(f"扩大边距后bbox: ({x_min_real}, {y_min_real}, {x_max_real}, {y_max_real})")
-                    
-                    # 5.5 裁剪图片
-                    cropped_image = image[y_min_real:y_max_real, x_min_real:x_max_real]
-                    
-                    if cropped_image.size == 0:
-                        raise ValueError("裁剪后的图片为空")
-                    
-                    # 5.6 编码为JPEG
-                    _, encoded_image = cv2.imencode('.jpg', cropped_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                    cropped_bytes = encoded_image.tobytes()
-                    
-                    # 5.7 上传裁剪后的图片到bucket
-                    logger.info(f"正在上传裁剪后的图片: {question_number}")
-                    cropped_file_id = ID.unique()
-                    cropped_file_name = f"cropped_{question_number.replace(' ', '_')}_{cropped_file_id}.jpg"
-                    
-                    # 使用 bucket 的默认权限
-                    await asyncio.to_thread(
-                        self.storage.create_file,
-                        bucket_id=ORIGIN_IMAGE_BUCKET,
-                        file_id=cropped_file_id,
-                        file=InputFile.from_bytes(cropped_bytes, filename=cropped_file_name),
-                        permissions=['read("any")', 'update("users")', 'delete("users")']
-                    )
-                    
-                    logger.info(f"✓ 成功上传裁剪图片: {cropped_file_id}")
-                    cropped_image_ids.append(cropped_file_id)
-                    
-                    # 5.8 更新进度
+                    # 更新进度
                     await self._update_task_status(
                         task_id,
                         'processing',
                         completed_count=len(cropped_image_ids),
-                        cropped_image_ids=cropped_image_ids
+                        cropped_image_ids=cropped_image_ids.copy()  # 使用副本避免并发问题
                     )
-                    
-                except Exception as e:
-                    logger.error(f"处理题目 '{question_number}' 失败: {str(e)}", exc_info=True)
-                    failed_questions.append(f"{question_number}: {str(e)}")
-                    # 继续处理下一个题目
-                    continue
+                
+                return cropped_file_id, error_msg
             
-            # 6. 所有题目处理完成，更新最终状态
+            # 6. 并行处理所有题目
+            logger.info(f"开始并行处理 {len(question_numbers)} 个题目")
+            tasks = [
+                process_with_progress_update(question_number)
+                for question_number in question_numbers
+            ]
+            
+            # 等待所有任务完成
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 处理异常结果
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.error(f"任务执行异常: {str(result)}", exc_info=True)
+                    failed_questions.append(f"任务异常: {str(result)}")
+            
+            logger.info(f"并行处理完成: 成功 {len(cropped_image_ids)}, 失败 {len(failed_questions)}")
+            
+            # 7. 所有题目处理完成，更新最终状态
             if len(cropped_image_ids) == 0:
                 # 所有题目都失败了
                 await self._update_task_status(

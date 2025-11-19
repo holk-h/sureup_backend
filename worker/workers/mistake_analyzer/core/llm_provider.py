@@ -600,25 +600,25 @@ def get_llm_provider(**kwargs) -> VolcengineLLMProvider:
     # 从环境变量或 kwargs 获取配置（兼容两种命名）
     api_key = (
         kwargs.get('api_key') or 
-        os.environ.get('VOLC_API_KEY') or 
-        os.environ.get('DOUBAO_API_KEY')
+        os.environ.get('DOUBAO_API_KEY') or 
+        os.environ.get('VOLC_API_KEY')
     )
     endpoint_id = (
         kwargs.get('endpoint_id') or 
-        os.environ.get('VOLC_ENDPOINT_ID') or 
-        os.environ.get('DOUBAO_MODEL')
+        os.environ.get('DOUBAO_MODEL') or 
+        os.environ.get('VOLC_ENDPOINT_ID')
     )
     endpoint = (
         kwargs.get('endpoint') or 
-        os.environ.get('VOLC_ENDPOINT') or 
-        os.environ.get('DOUBAO_ENDPOINT', 'https://ark.cn-beijing.volces.com/api/v3')
+        os.environ.get('DOUBAO_ENDPOINT') or 
+        os.environ.get('VOLC_ENDPOINT', 'https://ark.cn-beijing.volces.com/api/v3')
     )
     
     # 验证必需参数
     if not api_key:
-        raise ValueError("需要提供 VOLC_API_KEY 或 DOUBAO_API_KEY")
+        raise ValueError("需要提供 DOUBAO_API_KEY 或 VOLC_API_KEY")
     if not endpoint_id:
-        raise ValueError("需要提供 VOLC_ENDPOINT_ID 或 DOUBAO_MODEL")
+        raise ValueError("需要提供 DOUBAO_MODEL 或 VOLC_ENDPOINT_ID")
     
     # 可选参数
     timeout = kwargs.get('timeout') or int(os.environ.get('VOLC_TIMEOUT', '120'))

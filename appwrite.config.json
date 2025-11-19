@@ -521,6 +521,29 @@
             }
         },
         {
+            "$id": "ai-helper",
+            "name": "AI 辅助工具",
+            "runtime": "python-3.9",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [],
+            "schedule": "",
+            "timeout": 30,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.py",
+            "commands": "pip install -r requirements.txt",
+            "path": "functions/ai-helper",
+            "variables": {
+                "DOUBAO_API_KEY": "",
+                "DOUBAO_MODEL": "",
+                "DOUBAO_ENDPOINT": "https://ark.cn-beijing.volces.com/api/v3"
+            }
+        },
+        {
             "$id": "account-delete",
             "name": "账户删除",
             "runtime": "python-3.9",
