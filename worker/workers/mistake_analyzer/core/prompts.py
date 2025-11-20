@@ -32,7 +32,6 @@ def build_user_feedback_section(
         prev_options_text = '\n'.join(prev_options) if prev_options else '无'
         
         return f"""
-
 🚨🚨🚨 **重要：用户反馈（上次识别出现了错误）** 🚨🚨🚨
 
 **上次你识别的结果：**
@@ -49,11 +48,9 @@ def build_user_feedback_section(
 ❗❗❗ **请仔细对比上次的识别结果和用户反馈，找出错误在哪里，这次务必修正！** ❗❗❗
 
 ---
-
 """
     elif user_feedback:
         return f"""
-
 🚨🚨🚨 **重要：用户反馈（识别出现了错误）** 🚨🚨🚨
 
 **用户指出的问题：**
@@ -62,7 +59,6 @@ def build_user_feedback_section(
 ❗❗❗ **请务必特别注意上述问题，优先修正这些错误！** ❗❗❗
 
 ---
-
 """
     return ""
 
@@ -70,8 +66,7 @@ def build_user_feedback_section(
 def build_multi_image_hint(image_count: int) -> str:
     """构建多图提示"""
     if image_count > 1:
-        return f"""
-**重要提示：这是一道跨页题目，共 {image_count} 张图片！**
+        return f"""**重要提示：这是一道跨页题目，共 {image_count} 张图片！**
 - 图片按顺序展示了题目的不同部分（可能是题目、图表、选项分布在不同页）
 - 请综合所有图片的内容，整合为一道完整的题目
 - 所有页面的内容都属于同一道题，请完整提取
@@ -96,14 +91,14 @@ def get_ocr_user_prompt(
    - 行内公式：\( ... \)
    - 独立公式：\[ ... \]（独立成行）
    - 保留原始结构和段落
-   
+
 2. **题目类型**：choice/fillBlank/shortAnswer/essay
 
 3. **选项**（仅选择题）：每行一个选项，公式也用 LaTeX
 
 4. **学科**：math/physics/chemistry/biology/chinese/english/history/geography/politics
 
-    5. **图片位置**（重要）：如果题目中包含图表、函数图像、几何图形、实验装置图等，请标记其位置。
+5. **图片位置**（重要）：如果题目中包含图表、函数图像、几何图形、实验装置图等，请标记其位置。
 
 **返回格式（分段标记，不要用代码块包裹）：**
 
@@ -120,10 +115,10 @@ def get_ocr_user_prompt(
 选项1
 选项2
 ...
-    
-    ##PIC##
-    题目中的图片位置（如果没有图片留空）
-    [image_index] <bbox>x1 y1 x2 y2</bbox>
+
+##PIC##
+框选题目中的图片位置（如果没有图片留空）
+[image_index] <bbox>x1 y1 x2 y2</bbox>
 
 ##END##
 
@@ -144,7 +139,7 @@ B. 2
 C. 3
 D. 4
 
-    ##PIC##
+##PIC##
 
 ##END##
 
@@ -160,9 +155,9 @@ physics
 质量为 \( m \) 的物体受力 \( F \)，根据牛顿第二定律 \( F = ma \)，则加速度 \( a \) = ______。
 
 ##OPTIONS##
-    
-    ##PIC##
-    [1] <bbox>100 100 500 500</bbox>
+
+##PIC##
+[1] <bbox>100 100 500 500</bbox>
 
 ##END##
 
@@ -184,8 +179,8 @@ math
 请写出详细步骤。
 
 ##OPTIONS##
-    
-    ##PIC##
+
+##PIC##
 
 ##END##
 
@@ -205,8 +200,8 @@ A. \( \text{{Na}} \rightarrow \text{{Na}}_2\text{{O}}_2 \)
 B. \( \text{{Cl}}_2 \rightarrow \text{{FeCl}}_3 \)
 C. \( \text{{SO}}_3 \rightarrow \text{{Na}}_2\text{{SO}}_4 \)
 D. \( \text{{Fe}}_2\text{{O}}_3 \rightarrow \text{{Fe(OH)}}_3 \)
-    
-    ##PIC##
+
+##PIC##
 
 ##END##
 
@@ -232,13 +227,14 @@ D. \( \text{{Fe}}_2\text{{O}}_3 \rightarrow \text{{Fe(OH)}}_3 \)
 - LaTeX 公式直接书写，不需要转义反斜杠
 - **化学式必须用 \text{{}} 包裹**，确保化学元素符号正确显示
 - OPTIONS 部分如果是非选择题，留空即可
-    - PIC 部分：如果题目包含重要的几何图形、函数图像、物理情景图、化学实验装置图等，请检测其位置。
-      * 格式：[image_index] <bbox>x1 y1 x2 y2</bbox>
-      * image_index：图片序号（从1开始），对应输入的第几张图片
-      * 坐标范围：0-1000（归一化到1000*1000的比例坐标）
-      * x1, y1 是左上角坐标，x2, y2 是右下角坐标
-      * 如果有多张图表，每行一个
-      * 如果题目没有图片，或图片仅仅是装饰性的，PIC 部分留空
+- PIC 部分：如果题目包含重要的几何图形、函数图像、物理情景图、化学实验装置图等，请检测其位置。
+  * 格式：[image_index] <bbox>x1 y1 x2 y2</bbox>
+  * image_index：图片序号（从1开始），对应输入的第几张图片
+  * 坐标范围：0-1000（归一化到1000*1000的比例坐标）
+  * x1, y1 是左上角坐标，x2, y2 是右下角坐标
+  * 如果有多张图表，每行一个
+  * 如果题目没有图片，或图片仅仅是装饰性的，PIC 部分留空
+  * 如果题目图片带有说明文字，如“图-xx”或“图-xx-xx”等，请一并框选图片和说明文字
 
 {user_feedback_section}"""
 
@@ -290,17 +286,15 @@ def build_modules_hint(modules_text: str) -> str:
     """构建模块列表提示"""
     if modules_text:
         return f"""
-
 **可用模块列表（必须从中选择）：**
 {modules_text}"""
-    return "\n\n**注意**：系统暂无模块数据，请使用\"未分类\"。"
+    return "\n**注意**：系统暂无模块数据，请使用\"未分类\"。"
 
 
 def build_existing_kp_hint(knowledge_points_text: str) -> str:
     """构建已有知识点提示"""
     if knowledge_points_text:
         return f"""
-
 **用户已有的知识点（优先使用这些，避免重复）：**
 {knowledge_points_text}
 

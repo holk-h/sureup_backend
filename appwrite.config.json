@@ -516,8 +516,8 @@
                 "APPWRITE_PROJECT_ID": "6901942c30c3962e66eb",
                 "APPWRITE_API_KEY": "",
                 "APPWRITE_DATABASE_ID": "main",
-                "APPLE_BUNDLE_ID": "com.delvetech.sureup",
-                "APPLE_ENVIRONMENT": "Sandbox"
+                "APPLE_BUNDLE_ID": "cn.delvetech.sureup",
+                "APPLE_ENVIRONMENT": "Production"
             }
         },
         {
@@ -687,7 +687,7 @@
                     "type": "string",
                     "required": false,
                     "array": false,
-                    "size": 20,
+                    "size": 50,
                     "default": null,
                     "encrypt": false
                 },
@@ -827,14 +827,14 @@
                     "type": "boolean",
                     "required": false,
                     "array": false,
-                    "default": false
+                    "default": true
                 },
                 {
                     "key": "reviewReminderEnabled",
                     "type": "boolean",
                     "required": false,
                     "array": false,
-                    "default": false
+                    "default": true
                 },
                 {
                     "key": "reviewReminderTime",
@@ -842,7 +842,7 @@
                     "required": false,
                     "array": false,
                     "size": 10,
-                    "default": null,
+                    "default": "20:00",
                     "encrypt": false
                 },
                 {
@@ -1419,6 +1419,15 @@
                     "size": 100,
                     "default": null,
                     "encrypt": false
+                },
+                {
+                    "key": "extractedImages",
+                    "type": "string",
+                    "required": false,
+                    "array": true,
+                    "size": 200,
+                    "default": null,
+                    "encrypt": false
                 }
             ],
             "indexes": [
@@ -1572,15 +1581,6 @@
                     "encrypt": false
                 },
                 {
-                    "key": "correctAnswer",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 1000,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
                     "key": "masteryStatus",
                     "type": "string",
                     "required": false,
@@ -1653,6 +1653,15 @@
                     "required": false,
                     "array": true,
                     "size": 2000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "correctAnswer",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 1000,
                     "default": null,
                     "encrypt": false
                 }
@@ -2921,21 +2930,30 @@
                     "encrypt": false
                 },
                 {
-                    "key": "questionNumbers",
-                    "type": "string",
-                    "required": true,
-                    "array": true,
-                    "size": 50,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
                     "key": "status",
                     "type": "string",
                     "required": false,
                     "array": false,
                     "size": 20,
                     "default": "pending",
+                    "encrypt": false
+                },
+                {
+                    "key": "error",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 2000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
+                    "key": "questionNumbers",
+                    "type": "string",
+                    "required": true,
+                    "array": true,
+                    "size": 50,
+                    "default": null,
                     "encrypt": false
                 },
                 {
@@ -2962,15 +2980,6 @@
                     "required": false,
                     "array": true,
                     "size": 100,
-                    "default": null,
-                    "encrypt": false
-                },
-                {
-                    "key": "error",
-                    "type": "string",
-                    "required": false,
-                    "array": false,
-                    "size": 2000,
                     "default": null,
                     "encrypt": false
                 }
