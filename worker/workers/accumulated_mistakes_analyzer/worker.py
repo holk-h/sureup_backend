@@ -646,9 +646,10 @@ class AccumulatedMistakesAnalyzerWorker(BaseWorker):
                     detail += f"\n{option}"
             
             # 正确答案
-            answer = (mistake.get('answer') or '').strip()
-            if answer:
-                detail += f"\n\n**正确答案：** {answer}"
+            # 优先使用错题记录中的修正答案 (correctAnswer)，如果没有则使用原题答案 (answer)
+            correct_answer = (mistake.get('correctAnswer') or mistake.get('answer') or '').strip()
+            if correct_answer:
+                detail += f"\n\n**正确答案：** {correct_answer}"
             
             # 用户答案
             user_answer = (mistake.get('userAnswer') or '').strip()

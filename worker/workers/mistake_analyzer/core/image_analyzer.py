@@ -9,8 +9,15 @@
 """
 import os
 import asyncio
+import base64
+import cv2
+import numpy as np
 from typing import Dict, List, Optional
+from appwrite.client import Client
 from appwrite.services.databases import Databases
+from appwrite.services.storage import Storage
+from appwrite.id import ID
+from appwrite.input_file import InputFile
 
 from workers.mistake_analyzer.core.llm_provider import get_llm_provider
 from workers.mistake_analyzer.core.parsers import parse_segmented_response, parse_knowledge_points_response
@@ -37,6 +44,14 @@ QUESTION_TYPES = ['choice', 'fillBlank', 'shortAnswer', 'essay']
 
 
 # ============= 工具函数 =============
+
+def get_storage() -> Storage:
+    """Initialize Storage service"""
+    client = Client()
+    client.set_endpoint(os.environ.get('APPWRITE_ENDPOINT', 'https://cloud.appwrite.io/v1'))
+    client.set_project(os.environ['APPWRITE_PROJECT_ID'])
+    client.set_key(os.environ['APPWRITE_API_KEY'])
+    return Storage(client)
 
 def clean_base64(image_base64: str) -> str:
     """
@@ -79,6 +94,95 @@ def _normalize_module_name(module_name: str) -> str:
     if '：' in module_name or ':' in module_name:
         module_name = module_name.split('：')[0].split(':')[0].strip()
     return module_name
+
+
+async def crop_and_upload_image(
+    image_base64: str,
+    bbox: List[int],
+    subject: str
+) -> Optional[str]:
+    """
+    根据 bbox 裁剪图片并上传到 storage
+    
+    Args:
+        image_base64: 原始图片 base64 (无前缀)
+        bbox: [x1, y1, x2, y2] 归一化坐标 (0-1000)
+        subject: 学科代码
+        
+    Returns:
+        str: 上传后的 file_id, 失败返回 None
+    """
+    try:
+        # 1. 解码图片
+        image_data = base64.b64decode(image_base64)
+        nparr = np.frombuffer(image_data, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            print("❌ 图片解码失败")
+            return None
+            
+        h, w = image.shape[:2]
+        
+        # 2. 转换坐标
+        x1, y1, x2, y2 = bbox
+        
+        # 验证坐标范围
+        if not (0 <= x1 < x2 <= 1000 and 0 <= y1 < y2 <= 1000):
+            print(f"⚠️ bbox 坐标无效: {bbox}")
+            return None
+            
+        # 转换为实际像素坐标
+        x_min = int(x1 * w / 1000)
+        y_min = int(y1 * h / 1000)
+        x_max = int(x2 * w / 1000)
+        y_max = int(y2 * h / 1000)
+        
+        # 扩大一些边距 (5%)
+        margin_x = int((x_max - x_min) * 0.05)
+        margin_y = int((y_max - y_min) * 0.05)
+        
+        x_min = max(0, x_min - margin_x)
+        y_min = max(0, y_min - margin_y)
+        x_max = min(w, x_max + margin_x)
+        y_max = min(h, y_max + margin_y)
+        
+        # 3. 裁剪
+        cropped_image = image[y_min:y_max, x_min:x_max]
+        
+        if cropped_image.size == 0:
+            print("❌ 裁剪结果为空")
+            return None
+            
+        # 4. 编码为 JPEG
+        _, encoded_image = cv2.imencode('.jpg', cropped_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        cropped_bytes = encoded_image.tobytes()
+        
+        # 5. 上传
+        storage = get_storage()
+        bucket_id = 'extracted_images' # 必须确保这个 bucket 存在
+        file_id = ID.unique()
+        file_name = f"extracted_{subject}_{file_id}.jpg"
+        
+        print(f"📤 正在上传提取的图片: {file_name}")
+        
+        await asyncio.to_thread(
+            storage.create_file,
+            bucket_id=bucket_id,
+            file_id=file_id,
+            file=InputFile.from_bytes(cropped_bytes, filename=file_name),
+            permissions=['read("any")', 'update("users")', 'delete("users")']
+        )
+        
+        print(f"✅ 图片提取并上传成功: {file_id}")
+        return file_id
+        
+    except Exception as e:
+        print(f"❌ 图片裁剪上传失败: {str(e)}")
+        # 打印详细堆栈以便调试
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 # ============= 主要功能函数 =============
@@ -236,6 +340,44 @@ async def extract_question_content(
             result = parse_segmented_response(response)
             
             print(f"✅ 分段格式解析成功！题目类型: {result.get('type', '未知')}, 学科: {result.get('subject', '未知')}")
+            
+            # 处理图片裁剪 (如果有 bboxes)
+            image_ids = []
+            if 'bboxes' in result and result['bboxes']:
+                print(f"🖼️ 检测到 {len(result['bboxes'])} 个题目图片位置")
+                for item in result['bboxes']:
+                    img_idx = item.get('index', 0)
+                    bbox = item.get('bbox')
+                    
+                    if 0 <= img_idx < len(image_base64_list):
+                        target_image = image_base64_list[img_idx]
+                        print(f"   - 处理第 {img_idx+1} 张图片的 bbox: {bbox}")
+                        
+                        image_id = await crop_and_upload_image(
+                            target_image, 
+                            bbox,
+                            result.get('subject', 'unknown')
+                        )
+                        if image_id:
+                            image_ids.append(image_id)
+                    else:
+                        print(f"⚠️ 图片索引 {img_idx} 超出范围 (共 {len(image_base64_list)} 张)")
+            
+            # 兼容旧代码 (如果 parser 只返回了 bbox)
+            elif 'bbox' in result and result['bbox']:
+                print(f"🖼️ 检测到题目图片 (单图模式)，bbox: {result['bbox']}")
+                # 默认使用第一张图
+                if image_base64_list:
+                    image_id = await crop_and_upload_image(
+                        image_base64_list[0], 
+                        result['bbox'],
+                        result.get('subject', 'unknown')
+                    )
+                    if image_id:
+                        image_ids.append(image_id)
+            
+            if image_ids:
+                result['imageIds'] = image_ids
             
             # 验证和规范化
             if 'content' not in result or not result['content']:

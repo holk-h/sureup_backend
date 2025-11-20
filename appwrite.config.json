@@ -1572,6 +1572,15 @@
                     "encrypt": false
                 },
                 {
+                    "key": "correctAnswer",
+                    "type": "string",
+                    "required": false,
+                    "array": false,
+                    "size": 1000,
+                    "default": null,
+                    "encrypt": false
+                },
+                {
                     "key": "masteryStatus",
                     "type": "string",
                     "required": false,

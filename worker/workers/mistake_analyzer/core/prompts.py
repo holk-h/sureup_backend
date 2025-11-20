@@ -103,6 +103,8 @@ def get_ocr_user_prompt(
 
 4. **学科**：math/physics/chemistry/biology/chinese/english/history/geography/politics
 
+    5. **图片位置**（重要）：如果题目中包含图表、函数图像、几何图形、实验装置图等，请标记其位置。
+
 **返回格式（分段标记，不要用代码块包裹）：**
 
 ##TYPE##
@@ -118,6 +120,10 @@ def get_ocr_user_prompt(
 选项1
 选项2
 ...
+    
+    ##PIC##
+    题目中的图片位置（如果没有图片留空）
+    [image_index] <bbox>x1 y1 x2 y2</bbox>
 
 ##END##
 
@@ -138,6 +144,8 @@ B. 2
 C. 3
 D. 4
 
+    ##PIC##
+
 ##END##
 
 **示例2 - 填空题（物理）：**
@@ -152,6 +160,9 @@ physics
 质量为 \( m \) 的物体受力 \( F \)，根据牛顿第二定律 \( F = ma \)，则加速度 \( a \) = ______。
 
 ##OPTIONS##
+    
+    ##PIC##
+    [1] <bbox>100 100 500 500</bbox>
 
 ##END##
 
@@ -173,6 +184,8 @@ math
 请写出详细步骤。
 
 ##OPTIONS##
+    
+    ##PIC##
 
 ##END##
 
@@ -192,6 +205,8 @@ A. \( \text{{Na}} \rightarrow \text{{Na}}_2\text{{O}}_2 \)
 B. \( \text{{Cl}}_2 \rightarrow \text{{FeCl}}_3 \)
 C. \( \text{{SO}}_3 \rightarrow \text{{Na}}_2\text{{SO}}_4 \)
 D. \( \text{{Fe}}_2\text{{O}}_3 \rightarrow \text{{Fe(OH)}}_3 \)
+    
+    ##PIC##
 
 ##END##
 
@@ -217,6 +232,13 @@ D. \( \text{{Fe}}_2\text{{O}}_3 \rightarrow \text{{Fe(OH)}}_3 \)
 - LaTeX 公式直接书写，不需要转义反斜杠
 - **化学式必须用 \text{{}} 包裹**，确保化学元素符号正确显示
 - OPTIONS 部分如果是非选择题，留空即可
+    - PIC 部分：如果题目包含重要的几何图形、函数图像、物理情景图、化学实验装置图等，请检测其位置。
+      * 格式：[image_index] <bbox>x1 y1 x2 y2</bbox>
+      * image_index：图片序号（从1开始），对应输入的第几张图片
+      * 坐标范围：0-1000（归一化到1000*1000的比例坐标）
+      * x1, y1 是左上角坐标，x2, y2 是右下角坐标
+      * 如果有多张图表，每行一个
+      * 如果题目没有图片，或图片仅仅是装饰性的，PIC 部分留空
 
 {user_feedback_section}"""
 

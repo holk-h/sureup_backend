@@ -149,18 +149,28 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
         # 3.1 创建或更新题目记录
         if question_id:
             # 重新识别：更新已有题目
+            update_data = {
+                'subject': step1_result['subject'],
+                'content': step1_result['content'],
+                'type': step1_result['type'],
+                'options': step1_result.get('options', [])
+            }
+            # 更新提取的图片ID
+            if 'imageIds' in step1_result:
+                update_data['extractedImages'] = step1_result['imageIds'] # 提取的图表存入 extractedImages
+                # update_data['imageIds'] = [] # 保持 imageIds 为空或保留原值，视需求而定。通常 update 不会清空未提及的字段，除非显式设为空。
+                # 如果这里意图是"此题目无原始图片关联"（因为原始图片在 mistake_record 中），则 questions.imageIds 可以为空。
+                # 假设 imageIds 用于存储原始题目图片（如果有的话），而这里我们只处理了提取的图表。
+            else:
+                update_data['extractedImages'] = []
+
             print(f"更新已有题目记录: {question_id}")
             basic_question = await asyncio.to_thread(
                 databases.update_document,
                 database_id=DATABASE_ID,
                 collection_id=QUESTIONS_COLLECTION,
                 document_id=question_id,
-                data={
-                    'subject': step1_result['subject'],
-                    'content': step1_result['content'],
-                    'type': step1_result['type'],
-                    'options': step1_result.get('options', [])
-                }
+                data=update_data
             )
             print(f"✓ 题目已更新: {question_id}")
         else:
@@ -178,7 +188,8 @@ async def process_mistake_analysis(record_data: dict, databases: Databases, stor
                 options=step1_result.get('options'),
                 answer='',
                 explanation='',
-                image_ids=original_image_ids,  # 传递所有原始图片ID（支持多图）
+                image_ids=[],  # 原始图片ID列表（questions表通常不存原始整页图，只存提取图表）
+                extracted_images=step1_result.get('imageIds', []),  # 提取的图表ID列表
                 created_by=user_id,
                 source='ocr'
             )

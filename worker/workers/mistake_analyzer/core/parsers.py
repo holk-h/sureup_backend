@@ -78,18 +78,59 @@ def parse_segmented_response(response: str) -> Dict:
     if subject_match:
         sections['subject'] = subject_match.group(1).strip()
     
-    # 提取 CONTENT（到下一个标记为止，##OPTIONS## 或 ##END## 可选）
-    content_match = re.search(r'##CONTENT##\s*\n(.*?)(?=##OPTIONS##|##END##|$)', response, re.DOTALL | re.IGNORECASE)
+    # 提取 CONTENT（到下一个标记为止，##OPTIONS## 或 ##PIC## 或 ##END## 可选）
+    content_match = re.search(r'##CONTENT##\s*\n(.*?)(?=##OPTIONS##|##PIC##|##END##|$)', response, re.DOTALL | re.IGNORECASE)
     if content_match:
         sections['content'] = content_match.group(1).strip()
     
-    # 提取 OPTIONS（如果存在，##END## 可选）
-    options_match = re.search(r'##OPTIONS##\s*\n(.*?)(?=##END##|$)', response, re.DOTALL | re.IGNORECASE)
+    # 提取 OPTIONS（如果存在，##PIC## 或 ##END## 可选）
+    options_match = re.search(r'##OPTIONS##\s*\n(.*?)(?=##PIC##|##END##|$)', response, re.DOTALL | re.IGNORECASE)
     if options_match:
         options_text = options_match.group(1).strip()
         sections['options'] = [line.strip() for line in options_text.split('\n') if line.strip()] if options_text else []
     else:
         sections['options'] = []
+
+    # 提取 PIC（如果存在，##END## 可选）
+    pic_match = re.search(r'##PIC##\s*\n(.*?)(?=##END##|$)', response, re.DOTALL | re.IGNORECASE)
+    if pic_match:
+        pic_text = pic_match.group(1).strip()
+        if pic_text:
+            # 解析 bbox 列表: [index] <bbox>x1 y1 x2 y2</bbox>
+            bboxes = []
+            for line in pic_text.split('\n'):
+                line = line.strip()
+                if not line: continue
+                
+                # 尝试匹配带索引的
+                idx_bbox_match = re.search(r'\[(\d+)\]\s*<bbox>\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*</bbox>', line)
+                if idx_bbox_match:
+                    bboxes.append({
+                        'index': int(idx_bbox_match.group(1)) - 1, # 转为 0-based
+                        'bbox': [
+                            int(idx_bbox_match.group(2)), 
+                            int(idx_bbox_match.group(3)), 
+                            int(idx_bbox_match.group(4)), 
+                            int(idx_bbox_match.group(5))
+                        ]
+                    })
+                    continue
+                
+                # 尝试匹配不带索引的 (默认第0张图)
+                bbox_match = re.search(r'<bbox>\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*</bbox>', line)
+                if bbox_match:
+                    bboxes.append({
+                        'index': 0,
+                        'bbox': [
+                            int(bbox_match.group(1)), 
+                            int(bbox_match.group(2)), 
+                            int(bbox_match.group(3)), 
+                            int(bbox_match.group(4))
+                        ]
+                    })
+
+            if bboxes:
+                sections['bboxes'] = bboxes
     
     # 验证必需字段
     if 'type' not in sections:

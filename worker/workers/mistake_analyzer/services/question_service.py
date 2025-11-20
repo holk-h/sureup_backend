@@ -25,6 +25,7 @@ def create_question(
     answer: Optional[str] = None,
     explanation: Optional[str] = None,
     image_ids: Optional[List[str]] = None,
+    extracted_images: Optional[List[str]] = None,
     created_by: str = None,
     source: str = 'ocr'
 ) -> Dict:
@@ -54,7 +55,8 @@ def create_question(
         'options': options or [],
         'answer': answer or '',
         'explanation': explanation or '',           # Markdown 格式（含 LaTeX 公式）
-        'imageIds': image_ids or [],                # 题目中提取的图表文件ID（存储在bucket中）
+        'imageIds': image_ids or [],                # 题目原始图片ID列表
+        'extractedImages': extracted_images or [],  # 题目中提取的图表文件ID列表（bucket: extracted_images）
         'source': source,
         'createdBy': created_by,
         'isPublic': False,
